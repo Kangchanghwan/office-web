@@ -374,4 +374,72 @@
  }
     })();
 
+
+    // ---- offline image resolution: short-circuit sendImgUrls ----
+    // The stock AscCommon.sendImgUrls POSTs an "imgurls" command to the
+    // Document Server and parks the work on api.fCurCallback until the server
+    // answers. Offline there is no server, so the callback never fires: the
+    // image is never mapped for rendering and sync_StartAction(LoadImage) is
+    // left without its sync_EndAction (the stuck "Loading Image" mask). This
+    // hits "Insert image from URL" (user-supplied http(s) URL) and any
+    // already-local data:/blob: URL. Resolve both locally: data:/blob: URLs
+    // pass through; http(s) URLs are fetched and converted to data: URLs
+    // (CORS permitting — a failed fetch yields the SDK's standard 'error'
+    // entry instead of hanging).
+    (function () {
+        function isLocalUrl(u) {
+            return typeof u === 'string' &&
+                (u.indexOf('data:') === 0 || u.indexOf('blob:') === 0);
+        }
+        function isHttpUrl(u) {
+            return typeof u === 'string' &&
+                (u.indexOf('http://') === 0 || u.indexOf('https://') === 0);
+        }
+        function urlToDataUrl(u) {
+            return fetch(u).then(function (r) {
+                if (!r.ok) throw new Error('HTTP ' + r.status);
+                return r.blob();
+            }).then(function (blob) {
+                return new Promise(function (resolve, reject) {
+                    var fr = new FileReader();
+                    fr.onload = function () { resolve(fr.result); };
+                    fr.onerror = function () { reject(fr.error || new Error('read failed')); };
+                    fr.readAsDataURL(blob);
+                });
+            });
+        }
+        function patchSendImgUrls() {
+            var AC = window.AscCommon;
+            if (!AC || !AC.sendImgUrls || AC.__ooSendImgUrlsPatched) return false;
+            var original = AC.sendImgUrls;
+            AC.sendImgUrls = function (api, images, callback, bNotShowError, token) {
+                try {
+                    if (images && images.length && images.every(function (u) {
+                            return isLocalUrl(u) || isHttpUrl(u);
+                        })) {
+                        // Resolve locally with the same {url, path} shape the
+                        // server would return. data: URLs need no
+                        // g_oDocumentUrls mapping (getFullImageSrc2 returns
+                        // them unchanged), so url == path == the data URL.
+                        Promise.all(images.map(function (u) {
+                            if (isLocalUrl(u)) return Promise.resolve(u);
+                            return urlToDataUrl(u).catch(function () { return 'error'; });
+                        })).then(function (resolved) {
+                            callback(resolved.map(function (u) { return { url: u, path: u }; }));
+                        });
+                        return;
+                    }
+                } catch (e) { /* fall through to the original */ }
+                return original.apply(this, arguments);
+            };
+            AC.__ooSendImgUrlsPatched = true;
+            return true;
+        }
+        var tries = 0;
+        var timer = setInterval(function () {
+            tries++;
+            if (patchSendImgUrls() || tries > 600) clearInterval(timer);
+        }, 100);
+    })();
+
 })();

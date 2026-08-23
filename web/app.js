@@ -16,12 +16,109 @@
 
     // Bump on every deploy: keys the Cache API entry for x2t.wasm, so users
     // re-download the converter exactly once per release.
-    var BUILD_VERSION = '1.2.6';
+    var BUILD_VERSION = '1.2.7';
     window.__OO_BUILD_VERSION = BUILD_VERSION;
 
     // ---------- config from URL ----------
     var PARAMS = {};
     new URLSearchParams(window.location.search).forEach(function (v, k) { PARAMS[k] = v; });
+
+    // ---------- i18n ----------
+    // The editors ship 40+ locale packs (vendor/web-apps/apps/*/main/locale/);
+    // editorConfig.lang picks one. The app shell itself is translated for the
+    // languages in SHELL_I18N below (others fall back to English).
+    var LOCALES = ['ar', 'az', 'be', 'bg', 'ca', 'cs', 'da', 'de', 'el', 'en',
+        'es', 'eu', 'fi', 'fr', 'gl', 'he', 'hr', 'hu', 'hy', 'id', 'it', 'ja',
+        'ko', 'lo', 'lv', 'ms', 'nl', 'no', 'pl', 'pt', 'pt-pt', 'ro', 'ru',
+        'si', 'sk', 'sl', 'sq', 'sr-cyrl', 'sr', 'sv', 'tr', 'uk', 'ur', 'vi',
+        'zh', 'zh-tw'];
+    function detectEditorLang() {
+        var nav = (navigator.language || 'en').toLowerCase();
+        if (nav.indexOf('zh') === 0) {
+            return (nav.indexOf('tw') >= 0 || nav.indexOf('hk') >= 0 ||
+                    nav.indexOf('mo') >= 0 || nav.indexOf('hant') >= 0) ? 'zh-tw' : 'zh';
+        }
+        if (nav.indexOf('pt-pt') === 0) return 'pt-pt';
+        if (nav.indexOf('sr-cyrl') === 0) return 'sr-cyrl';
+        var primary = nav.split('-')[0];
+        for (var i = 0; i < LOCALES.length; i++) {
+            if (LOCALES[i] === primary) return primary;
+        }
+        return 'en';
+    }
+    var UI_LANG = detectEditorLang();
+    // Shell UI translations, keyed by the English source string. %s are
+    // positional substitutions. Missing keys fall back to English.
+    var SHELL_I18N = {
+        'zh': {
+            'Open, edit and save Office documents entirely in your browser.': '在浏览器中打开、编辑和保存 Office 文档。',
+            '📂 Open a file': '📂 打开文件',
+            '＋ Document': '＋ 文档',
+            '＋ Spreadsheet': '＋ 表格',
+            '＋ Presentation': '＋ 演示',
+            'Delete all files': '删除全部文件',
+            '← Files': '← 文件',
+            '💾 Save': '💾 保存',
+            'Back to file library': '返回文件库',
+            'Save to file library (Ctrl+S)': '保存到文件库（Ctrl+S）',
+            'Loading document …': '正在加载文档…',
+            'Starting editor …': '正在启动编辑器…',
+            'Converting document …': '正在转换文档…',
+            'Saving …': '正在保存…',
+            'Saved %s': '已保存 %s',
+            'Editor not ready': '编辑器未就绪',
+            'Open failed: %s': '打开失败：%s',
+            'Save failed: %s': '保存失败：%s',
+            'Save failed: No document data': '保存失败：没有文档数据',
+            'Document render timeout. Please reload.': '文档渲染超时，请刷新页面。',
+            'Editor error: %s': '编辑器错误：%s',
+            'Download as %s is not supported': '不支持下载为 %s',
+            'Generating %s …': '正在生成 %s…',
+            'Exported %s': '已导出 %s',
+            'Export failed: %s': '导出失败：%s',
+            'Note: %s is a legacy format; saved as %s': '提示：%s 是旧格式，已保存为 %s',
+            'Merge failed — downloaded the original PDF without the latest edits': '合并失败——已下载不含最新编辑的原始 PDF',
+            'Saved the original PDF — this file could not be re-merged, so the latest edits are not included (%s)': '已保存原始 PDF——该文件无法重新合并，最新编辑未包含在内（%s）',
+            'Name cannot be empty': '名称不能为空',
+            'Renamed to %s': '已重命名为 %s',
+            'Rename failed: %s': '重命名失败：%s',
+            'Delete "%s"?': '删除"%s"？',
+            'Rename file:': '重命名文件：',
+            'Delete ALL files from the library? This cannot be undone.': '删除文件库中的所有文件？此操作无法撤销。',
+            'New name:': '新名称：'
+        }
+    };
+    function t(key) {
+        var dict = SHELL_I18N[UI_LANG];
+        var s = (dict && dict[key]) || key;
+        for (var i = 1; i < arguments.length; i++) {
+            s = s.replace('%s', String(arguments[i]));
+        }
+        return s;
+    }
+    // Translate the static shell markup (index.html) once the DOM is ready.
+    function translateShell() {
+        var dict = SHELL_I18N[UI_LANG];
+        if (!dict) return;   // English (or untranslated language): keep markup as-is
+        function setText(sel, key) {
+            var el = document.querySelector(sel);
+            if (el) el.textContent = dict[key] || el.textContent;
+        }
+        function setTitle(sel, key) {
+            var el = document.querySelector(sel);
+            if (el && dict[key]) el.setAttribute('title', dict[key]);
+        }
+        setText('.subtitle', 'Open, edit and save Office documents entirely in your browser.');
+        setText('#upload-btn', '📂 Open a file');
+        setText('[data-new="docx"]', '＋ Document');
+        setText('[data-new="xlsx"]', '＋ Spreadsheet');
+        setText('[data-new="pptx"]', '＋ Presentation');
+        var clearBtn = document.querySelector('#clear-all-btn');
+        if (clearBtn && dict['Delete all files']) clearBtn.textContent = '🗑 ' + dict['Delete all files'];
+        setTitle('#clear-all-btn', 'Delete all files');
+        setText('#back-home', '← Files'); setTitle('#back-home', 'Back to file library');
+        setText('#save-btn', '💾 Save'); setTitle('#save-btn', 'Save to file library (Ctrl+S)');
+    }
 
     // Determine the entry type. Priority: explicit global (?set by an embedder),
     // ?type= param, then the page filename (docx.html -> 'docx', etc.).
@@ -122,11 +219,19 @@
     // embeds the needed glyphs. Fetched lazily (only when merging real
     // changes) and cached in memory. NotoSansSC covers BOTH Latin and CJK
     // (the primary fallback for newly typed text); DroidSansFallbackFull
-    // (CJK) and DejaVuSans (Latin) are secondary fallbacks.
+    // (CJK) and DejaVuSans (Latin) are secondary fallbacks. The extra faces
+    // cover scripts Noto Sans SC lacks so typed Arabic/Devanagari/Korean/
+    // Thai text embeds correctly instead of dropping glyphs:
+    //   NotoNaskhArabic (Arabic), LohitDevanagari (Devanagari/Hindi),
+    //   NanumGothic (Korean), FreeSerif (Thai + many others).
     var PDF_MERGE_FONTS = [
         { url: 'vendor/pdf-fonts/NotoSansSC.ttf', name: 'NotoSansSC.ttf' },
         { url: 'vendor/pdf-fonts/DroidSansFallbackFull.ttf', name: 'DroidSansFallbackFull.ttf' },
-        { url: 'vendor/pdf-fonts/DejaVuSans.ttf', name: 'DejaVuSans.ttf' }
+        { url: 'vendor/pdf-fonts/DejaVuSans.ttf', name: 'DejaVuSans.ttf' },
+        { url: 'vendor/pdf-fonts/NotoNaskhArabic.ttf', name: 'NotoNaskhArabic.ttf' },
+        { url: 'vendor/pdf-fonts/LohitDevanagari.ttf', name: 'LohitDevanagari.ttf' },
+        { url: 'vendor/pdf-fonts/NanumGothic.ttf', name: 'NanumGothic.ttf' },
+        { url: 'vendor/pdf-fonts/FreeSerif.ttf', name: 'FreeSerif.ttf' }
     ];
     var __pdfMergeFontsPromise = null;
     function loadPdfMergeFonts() {
@@ -319,7 +424,7 @@
                 hookAutosave();
             } else if (waited > 60000) {
                 clearInterval(timer);
-                setStatus('Document render timeout. Please reload.', true);
+                setStatus(t('Document render timeout. Please reload.'), true);
             }
         }, 300);
     }
@@ -349,7 +454,7 @@
             document: document,
             editorConfig: {
                 mode: 'edit',
-                lang: 'en',
+                lang: UI_LANG,
                 canCoAuthoring: false,
                 user: { id: 'local-user', name: 'Local User' },
                 customization: { about: false, feedback: false, autosave: false }
@@ -360,12 +465,12 @@
                     if (pendingBin && !emptyDocGotReal) {
                         var bin = pendingBin;
                         pendingBin = null;
-                        setStatus('Loading document …');
+                        setStatus(t('Loading document …'));
                         var buf = bin.slice();
                         docEditor.openDocument({ buffer: buf.buffer });
                     }
                 },
-                onError: function (e) { setStatus('Editor error: ' + JSON.stringify(e && e.data), true); },
+                onError: function (e) { setStatus(t('Editor error: %s', JSON.stringify(e && e.data)), true); },
                 onDownloadAs: function () {},
                 onRequestClose: function () { window.close(); },
                 onRequestSave: function () { saveDocument(); }
@@ -394,7 +499,7 @@
             // __x2tReadyPromise is ready or nearly so), saving the 36MB
             // wasm wait on the open path.
             window.__ooPendingDocBin = file.data;
-            setStatus('Starting editor …');
+            setStatus(t('Starting editor …'));
             createEditor(ext, currentFile.name);
             waitDocumentRendered(docType);
             if (window.OOEditorState && window.OOEditorState._start) {
@@ -404,18 +509,18 @@
         }
 
         window.__x2tReadyPromise.then(function (mod) {
-            setStatus('Converting document …');
+            setStatus(t('Converting document …'));
             var bin = x2tConvert(mod, file.data, ext, 'bin', 'open');
             pendingBin = bin;
             window.__ooPendingDocBin = bin;
-            setStatus('Starting editor …');
+            setStatus(t('Starting editor …'));
             createEditor(ext, currentFile.name);
             waitDocumentRendered(docType);
             if (window.OOEditorState && window.OOEditorState._start) {
                 window.OOEditorState._start(ext, docType, currentFile.name);
             }
         }).catch(function (e) {
-            setStatus('Open failed: ' + (e && e.message || e), true);
+            setStatus(t('Open failed: %s', (e && e.message || e)), true);
         });
     }
 
@@ -444,10 +549,10 @@
     function doSave() {
         var frame = document.querySelector('iframe[name="frameEditor"]');
         if (!frame || !frame.contentWindow || typeof frame.contentWindow.__ooGetFileData !== 'function') {
-            setStatus('Editor not ready', true);
+            setStatus(t('Editor not ready'), true);
             return Promise.resolve(false);
         }
-        setStatus('Saving …');
+        setStatus(t('Saving …'));
         var openExt = (window.__ooDocExt || '').toLowerCase();
         if (openExt === 'pdf') {
             // Two-stage PDF save: bin = base PDF (__ooGetFileData), the
@@ -457,7 +562,7 @@
             // mergePdfChanges returns the base as-is.
             var base = frame.contentWindow.__ooGetFileData();
             if (!base || !base.length) {
-                setStatus('Save failed: No document data', true);
+                setStatus(t('Save failed: No document data'), true);
                 return Promise.resolve(false);
             }
             var changes = frame.contentWindow.__ooGetPdfChanges
@@ -467,7 +572,7 @@
             return mergePdfChanges(base, changes).then(function (merged) {
                 return persistToLibrary(merged.slice(), 'pdf').then(function () {
                     markSaved(frame, seqAtStart, changesLen);
-                    setStatus('Saved ' + new Date().toLocaleTimeString());
+                    setStatus(t('Saved %s', new Date().toLocaleTimeString()));
                     setTimeout(function () { setStatus(''); }, 3000);
                     return true;
                 });
@@ -484,7 +589,7 @@
                     // failing for this file, so re-trying every interval would
                     // only spam the same warning. A manual save still re-tries.
                     markSaved(frame, seqAtStart, changesLen);
-                    setStatus('Saved the original PDF — this file could not be re-merged, so the latest edits are not included (' + (e && e.message || e) + ')', true);
+                    setStatus(t('Saved the original PDF — this file could not be re-merged, so the latest edits are not included (%s)', (e && e.message || e)), true);
                     setTimeout(function () { setStatus(''); }, 10000);
                     return true;
                 });
@@ -502,7 +607,7 @@
                     saveExt = openExt;
                 } else if (openExt && LEGACY_TO_NEW[openExt] && supported.indexOf(LEGACY_TO_NEW[openExt]) >= 0) {
                     saveExt = LEGACY_TO_NEW[openExt];
-                    setStatus('Note: ' + openExt + ' is a legacy format; saved as ' + saveExt);
+                    setStatus(t('Note: %s is a legacy format; saved as %s', openExt, saveExt));
                 } else {
                     saveExt = supported[0];
                 }
@@ -513,11 +618,11 @@
             return persistToLibrary(bytes, saveExt);
         }).then(function () {
             markSaved(frame, seqAtStart2);
-            setStatus('Saved ' + new Date().toLocaleTimeString());
+            setStatus(t('Saved %s', new Date().toLocaleTimeString()));
             setTimeout(function () { setStatus(''); }, 3000);
             return true;
         }).catch(function (e) {
-            setStatus('Save failed: ' + (e && e.message || e), true);
+            setStatus(t('Save failed: %s', (e && e.message || e)), true);
             return false;
         });
     }
@@ -577,11 +682,11 @@
         var ext = OFFLINE_FORMAT_EXT[msg.format];
         if (!ext) {
             var nm = OFFLINE_FORMAT_NAMES[msg.format] || ('format #' + msg.format);
-            setStatus('Download as ' + nm + ' is not supported', true);
+            setStatus(t('Download as %s is not supported', nm), true);
             setTimeout(function () { setStatus(''); }, 4000);
             return;
         }
-        setStatus('Generating ' + ext + ' …');
+        setStatus(t('Generating %s …', ext));
         var bytesPromise;
         var pdfFallback = false;
         if (msg.format === 513 && msg.pdf) {
@@ -607,14 +712,14 @@
             var base = (msg.title || 'document').replace(/\.[^.]+$/, '');
             triggerDownload(bytes, base + '.' + ext);
             if (pdfFallback) {
-                setStatus('Merge failed — downloaded the original PDF without the latest edits', true);
+                setStatus(t('Merge failed — downloaded the original PDF without the latest edits'), true);
                 setTimeout(function () { setStatus(''); }, 8000);
             } else {
-                setStatus('Exported ' + ext);
+                setStatus(t('Exported %s', ext));
                 setTimeout(function () { setStatus(''); }, 2500);
             }
         }).catch(function (e) {
-            setStatus('Export failed: ' + (e && e.message || e), true);
+            setStatus(t('Export failed: %s', (e && e.message || e)), true);
         });
     }
 
@@ -661,7 +766,7 @@
                 });
                 item.querySelector('.file-del').addEventListener('click', function (ev) {
                     ev.stopPropagation();
-                    if (confirm('Delete "' + f.name + '"?')) {
+                    if (confirm(t('Delete "%s"?', f.name))) {
                         window.FileStore.remove(f.id).then(refreshLibrary);
                     }
                 });
@@ -671,10 +776,10 @@
     }
 
     function renameFile(f) {
-        var input = prompt('Rename file:', f.name);
+        var input = prompt(t('Rename file:'), f.name);
         if (input === null) return;
         input = input.trim();
-        if (!input) { setStatus('Name cannot be empty', true); setTimeout(function () { setStatus(''); }, 3000); return; }
+        if (!input) { setStatus(t('Name cannot be empty'), true); setTimeout(function () { setStatus(''); }, 3000); return; }
         if (input === f.name) return;
         // Keep the original extension: if the user typed a new one, accept it
         // only when it matches this editor's writable formats; otherwise the
@@ -685,7 +790,7 @@
         var writable = { docx: 1, xlsx: 1, pptx: 1, pdf: 1, doc: 1, xls: 1, ppt: 1, odt: 1, ods: 1, odp: 1, csv: 1, rtf: 1, txt: 1 };
         if (!writable[ext]) ext = f.ext;
         window.FileStore.rename(f.id, base + '.' + ext, ext).then(function () {
-            setStatus('Renamed to ' + base + '.' + ext);
+            setStatus(t('Renamed to %s', base + '.' + ext));
             setTimeout(function () { setStatus(''); }, 3000);
             refreshLibrary();
         }).catch(function (e) {
@@ -705,7 +810,7 @@
     }
 
     function clearLibrary() {
-        if (!confirm('Delete ALL files from the library? This cannot be undone.')) return;
+        if (!confirm(t('Delete ALL files from the library? This cannot be undone.'))) return;
         window.FileStore.clear().then(function () {
             setStatus('All files deleted');
             setTimeout(function () { setStatus(''); }, 3000);
@@ -778,7 +883,7 @@
             showHome();
         };
         if (editorDirtyNow()) {
-            setStatus('Saving …');
+            setStatus(t('Saving …'));
             doSave().then(finish, finish);
         } else {
             finish();
@@ -904,6 +1009,7 @@
 
     // ---------- boot ----------
     function boot() {
+        translateShell();
         loadX2t().catch(function () {});
 
         // message bridge from the editor iframe

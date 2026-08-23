@@ -403,22 +403,40 @@
         }, 100);
     })();
 
-    // ---- 11) offline image resolution: short-circuit sendImgUrls for data: URLs ----
-    // In PDF edit mode the page scan extracts each image via the native
-    // GetImageBase64 and hands the editor a ready "data:image/..." URL. The
-    // stock AscCommon.sendImgUrls then POSTs an "imgurls" command to the
+    // ---- 11) offline image resolution: short-circuit sendImgUrls ----
+    // The stock AscCommon.sendImgUrls POSTs an "imgurls" command to the
     // Document Server and parks the work on api.fCurCallback until the server
     // answers. Offline there is no server, so the callback never fires: the
     // image is never mapped for rendering (it silently disappears from the
     // page) AND sync_StartAction(LoadImage) is left without its
-    // sync_EndAction (the stuck "Loading Image" mask).
-    // When every requested image is already a data: URL we can resolve it
-    // locally — no server round-trip, no async action — which restores the
-    // image in edit mode and clears the load path.
+    // sync_EndAction (the stuck "Loading Image" mask). This hits two cases:
+    //   a) PDF edit mode: the page scan extracts each image via the native
+    //      GetImageBase64 and hands the editor a ready "data:image/..." URL.
+    //   b) "Insert image from URL": the user-supplied http(s) URL.
+    // Resolve both locally: data:/blob: URLs pass through; http(s) URLs are
+    // fetched and converted to data: URLs (CORS permitting — a failed fetch
+    // yields the SDK's standard 'error' entry instead of hanging).
     (function () {
-        function isDataUrl(u) {
+        function isLocalUrl(u) {
             return typeof u === 'string' &&
                 (u.indexOf('data:') === 0 || u.indexOf('blob:') === 0);
+        }
+        function isHttpUrl(u) {
+            return typeof u === 'string' &&
+                (u.indexOf('http://') === 0 || u.indexOf('https://') === 0);
+        }
+        function urlToDataUrl(u) {
+            return fetch(u).then(function (r) {
+                if (!r.ok) throw new Error('HTTP ' + r.status);
+                return r.blob();
+            }).then(function (blob) {
+                return new Promise(function (resolve, reject) {
+                    var fr = new FileReader();
+                    fr.onload = function () { resolve(fr.result); };
+                    fr.onerror = function () { reject(fr.error || new Error('read failed')); };
+                    fr.readAsDataURL(blob);
+                });
+            });
         }
         function patchSendImgUrls() {
             var AC = window.AscCommon;
@@ -426,13 +444,19 @@
             var original = AC.sendImgUrls;
             AC.sendImgUrls = function (api, images, callback, bNotShowError, token) {
                 try {
-                    if (images && images.length && images.every(isDataUrl)) {
-                        // Build the same {url, path} shape the server would
-                        // return and resolve synchronously. data: URLs need no
-                        // g_oDocumentUrls mapping (getFullImageSrc2 returns them
-                        // unchanged), so url == path == the data URL.
-                        var data = images.map(function (u) { return { url: u, path: u }; });
-                        callback(data);
+                    if (images && images.length && images.every(function (u) {
+                            return isLocalUrl(u) || isHttpUrl(u);
+                        })) {
+                        // Resolve locally with the same {url, path} shape the
+                        // server would return. data: URLs need no
+                        // g_oDocumentUrls mapping (getFullImageSrc2 returns
+                        // them unchanged), so url == path == the data URL.
+                        Promise.all(images.map(function (u) {
+                            if (isLocalUrl(u)) return Promise.resolve(u);
+                            return urlToDataUrl(u).catch(function () { return 'error'; });
+                        })).then(function (resolved) {
+                            callback(resolved.map(function (u) { return { url: u, path: u }; }));
+                        });
                         return;
                     }
                 } catch (e) { /* fall through to the original */ }

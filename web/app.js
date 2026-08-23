@@ -16,7 +16,7 @@
 
     // Bump on every deploy: keys the Cache API entry for x2t.wasm, so users
     // re-download the converter exactly once per release.
-    var BUILD_VERSION = '1.2.2';
+    var BUILD_VERSION = '1.2.3';
     window.__OO_BUILD_VERSION = BUILD_VERSION;
 
     // ---------- config from URL ----------

@@ -16,7 +16,7 @@
 
     // Bump on every deploy: keys the Cache API entry for x2t.wasm, so users
     // re-download the converter exactly once per release.
-    var BUILD_VERSION = '1.2.5';
+    var BUILD_VERSION = '1.2.6';
     window.__OO_BUILD_VERSION = BUILD_VERSION;
 
     // ---------- config from URL ----------
@@ -213,6 +213,79 @@
     var emptyDocGotReal = false;
     var currentFile = null;   // { id, name, ext }
 
+    // ---------- autosave ----------
+    // The editors report "has unsaved changes" through the same event that
+    // drives their save-button state (asc_onDocumentCanSaveChanged). PDF is
+    // additionally probed via the compiled changes stream length (26-byte
+    // header == no edits), since its event path is less exercised offline.
+    // While dirty, the document is persisted to the IndexedDB library every
+    // AUTOSAVE_INTERVAL_MS, plus on tab-hide and before back-to-home, so a
+    // crash/refresh loses at most one interval of work.
+    var AUTOSAVE_INTERVAL_MS = 30000;
+    var dirty = false;
+    var editSeq = 0;               // bumped on every dirty signal (see doSave)
+    var lastSavedChangesLen = 26;  // PDF changes-stream length at last save
+    var autosaveTimer = null;
+
+    function onEditorCanSaveChanged(canSave) {
+        if (canSave) { dirty = true; editSeq++; }
+        else dirty = false;
+    }
+    function editorDirtyNow() {
+        if (!documentReady || !currentFile) return false;
+        if (dirty) return true;
+        if ((window.__ooDocExt || '').toLowerCase() === 'pdf') {
+            var frame = document.querySelector('iframe[name="frameEditor"]');
+            var w = frame && frame.contentWindow;
+            if (w && typeof w.__ooGetPdfChanges === 'function') {
+                try {
+                    var ch = w.__ooGetPdfChanges();
+                    if ((ch ? ch.length : 26) !== lastSavedChangesLen) return true;
+                } catch (e) {}
+            }
+        }
+        return false;
+    }
+    // After a successful persist, reset the editor's own modified flag too,
+    // so its save button greys out exactly like the server-backed flow.
+    function clearEditorModifiedFlag(frame) {
+        try {
+            var ed = frame.contentWindow.Asc && frame.contentWindow.Asc.editor;
+            if (!ed) return;
+            if (ed.SetUnchangedDocument) ed.SetUnchangedDocument();
+            else if (ed.SetDocumentModified) ed.SetDocumentModified(false);
+        } catch (e) {}
+    }
+    function autosaveTick() {
+        if (saveInFlight || !editorDirtyNow()) return;
+        saveDocument();
+    }
+    function startAutosave() {
+        stopAutosave();
+        autosaveTimer = setInterval(autosaveTick, AUTOSAVE_INTERVAL_MS);
+    }
+    function stopAutosave() {
+        if (autosaveTimer) { clearInterval(autosaveTimer); autosaveTimer = null; }
+        dirty = false;
+        lastSavedChangesLen = 26;
+    }
+    function hookAutosave() {
+        waitForEditorApi(function (ed) {
+            try { ed.asc_registerCallback('asc_onDocumentCanSaveChanged', onEditorCanSaveChanged); } catch (e) {}
+        });
+        startAutosave();
+    }
+    // A persist succeeded. Clear the dirty flag unless the user kept editing
+    // while the save was in flight (editSeq advanced), and sync the PDF
+    // changes-stream baseline so the probe doesn't re-fire immediately.
+    function markSaved(frame, seqAtStart, changesLen) {
+        if (typeof changesLen === 'number') lastSavedChangesLen = changesLen;
+        if (seqAtStart === editSeq) {
+            dirty = false;
+            if (frame) clearEditorModifiedFlag(frame);
+        }
+    }
+
     function waitDocumentRendered(docType) {
         var waited = 0;
         var timer = setInterval(function () {
@@ -243,6 +316,7 @@
                 clearInterval(timer);
                 documentReady = true;
                 setStatus('');
+                hookAutosave();
             } else if (waited > 60000) {
                 clearInterval(timer);
                 setStatus('Document render timeout. Please reload.', true);
@@ -388,8 +462,11 @@
             }
             var changes = frame.contentWindow.__ooGetPdfChanges
                 ? frame.contentWindow.__ooGetPdfChanges() : null;
+            var changesLen = changes ? changes.length : 26;
+            var seqAtStart = editSeq;
             return mergePdfChanges(base, changes).then(function (merged) {
                 return persistToLibrary(merged.slice(), 'pdf').then(function () {
+                    markSaved(frame, seqAtStart, changesLen);
                     setStatus('Saved ' + new Date().toLocaleTimeString());
                     setTimeout(function () { setStatus(''); }, 3000);
                     return true;
@@ -403,12 +480,17 @@
                 // the document is never lost, and tell the user plainly that
                 // the latest edits could not be merged into this file.
                 return persistToLibrary(base.slice(), 'pdf').then(function () {
+                    // Treat as saved for autosave purposes: the merge will keep
+                    // failing for this file, so re-trying every interval would
+                    // only spam the same warning. A manual save still re-tries.
+                    markSaved(frame, seqAtStart, changesLen);
                     setStatus('Saved the original PDF — this file could not be re-merged, so the latest edits are not included (' + (e && e.message || e) + ')', true);
                     setTimeout(function () { setStatus(''); }, 10000);
                     return true;
                 });
             });
         }
+        var seqAtStart2 = editSeq;
         return window.__x2tReadyPromise.then(function (mod) {
             var bin = frame.contentWindow.__ooGetFileData();
             if (!bin || !bin.length) throw new Error('No document data');
@@ -430,6 +512,7 @@
             var bytes = x2tConvert(mod, bin, 'bin', saveExt, 'save').slice();
             return persistToLibrary(bytes, saveExt);
         }).then(function () {
+            markSaved(frame, seqAtStart2);
             setStatus('Saved ' + new Date().toLocaleTimeString());
             setTimeout(function () { setStatus(''); }, 3000);
             return true;
@@ -675,22 +758,31 @@
     }
 
     // Back-to-home: return to the file library without reloading the page.
-    // The editor iframe is torn down; unsaved changes are lost (the status
-    // bar tells the user to save first if the document is dirty).
+    // The editor iframe is torn down, so any dirty document is persisted
+    // first (best-effort; the iframe is still alive when this runs).
     function backToHome() {
-        if (docEditor && typeof docEditor.destroyEditor === 'function') {
-            try { docEditor.destroyEditor(); } catch (e) {}
+        var finish = function () {
+            stopAutosave();
+            if (docEditor && typeof docEditor.destroyEditor === 'function') {
+                try { docEditor.destroyEditor(); } catch (e) {}
+            }
+            docEditor = null;
+            var ed = document.getElementById('editor');
+            if (ed) ed.innerHTML = '';
+            pendingBin = null;
+            window.__ooPendingDocBin = null;
+            documentReady = false;
+            emptyDocGotReal = false;
+            currentFile = null;
+            window.__ooDocExt = '';
+            showHome();
+        };
+        if (editorDirtyNow()) {
+            setStatus('Saving …');
+            doSave().then(finish, finish);
+        } else {
+            finish();
         }
-        docEditor = null;
-        var ed = document.getElementById('editor');
-        if (ed) ed.innerHTML = '';
-        pendingBin = null;
-        window.__ooPendingDocBin = null;
-        documentReady = false;
-        emptyDocGotReal = false;
-        currentFile = null;
-        window.__ooDocExt = '';
-        showHome();
     }
 
     function handleFiles(fileList) {
@@ -854,6 +946,20 @@
         var saveBtn = document.getElementById('save-btn');
         if (saveBtn) saveBtn.addEventListener('click', function () { saveDocument(); });
 
+        // Autosave on tab-hide/close. visibilitychange->hidden fires on tab
+        // switch while the page is still fully alive (the async IndexedDB
+        // write completes normally); pagehide covers tab close/navigation
+        // (best-effort: the browser usually lets a just-started same-origin
+        // IndexedDB transaction finish). Either way the last dirty state
+        // lands in the library even if the 30s timer hasn't fired yet.
+        var saveIfDirty = function () {
+            if (editorDirtyNow() && !saveInFlight) saveDocument();
+        };
+        document.addEventListener('visibilitychange', function () {
+            if (document.visibilityState === 'hidden') saveIfDirty();
+        });
+        window.addEventListener('pagehide', saveIfDirty);
+
         // library toolbar
         var clearAllBtn = document.getElementById('clear-all-btn');
         if (clearAllBtn) clearAllBtn.addEventListener('click', clearLibrary);
@@ -896,7 +1002,10 @@
         openFile: openFile,
         saveDocument: saveDocument,
         createNew: createNew,
-        version: BUILD_VERSION
+        version: BUILD_VERSION,
+        // autosave internals (used by the e2e suite)
+        isDirty: function () { return editorDirtyNow(); },
+        autosaveNow: function () { autosaveTick(); return saveInFlight; }
     };
 
     if (document.readyState === 'loading') {

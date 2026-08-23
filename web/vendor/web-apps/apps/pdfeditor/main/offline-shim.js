@@ -403,4 +403,49 @@
         }, 100);
     })();
 
+    // ---- 11) offline image resolution: short-circuit sendImgUrls for data: URLs ----
+    // In PDF edit mode the page scan extracts each image via the native
+    // GetImageBase64 and hands the editor a ready "data:image/..." URL. The
+    // stock AscCommon.sendImgUrls then POSTs an "imgurls" command to the
+    // Document Server and parks the work on api.fCurCallback until the server
+    // answers. Offline there is no server, so the callback never fires: the
+    // image is never mapped for rendering (it silently disappears from the
+    // page) AND sync_StartAction(LoadImage) is left without its
+    // sync_EndAction (the stuck "Loading Image" mask).
+    // When every requested image is already a data: URL we can resolve it
+    // locally — no server round-trip, no async action — which restores the
+    // image in edit mode and clears the load path.
+    (function () {
+        function isDataUrl(u) {
+            return typeof u === 'string' &&
+                (u.indexOf('data:') === 0 || u.indexOf('blob:') === 0);
+        }
+        function patchSendImgUrls() {
+            var AC = window.AscCommon;
+            if (!AC || !AC.sendImgUrls || AC.__ooSendImgUrlsPatched) return false;
+            var original = AC.sendImgUrls;
+            AC.sendImgUrls = function (api, images, callback, bNotShowError, token) {
+                try {
+                    if (images && images.length && images.every(isDataUrl)) {
+                        // Build the same {url, path} shape the server would
+                        // return and resolve synchronously. data: URLs need no
+                        // g_oDocumentUrls mapping (getFullImageSrc2 returns them
+                        // unchanged), so url == path == the data URL.
+                        var data = images.map(function (u) { return { url: u, path: u }; });
+                        callback(data);
+                        return;
+                    }
+                } catch (e) { /* fall through to the original */ }
+                return original.apply(this, arguments);
+            };
+            AC.__ooSendImgUrlsPatched = true;
+            return true;
+        }
+        var tries = 0;
+        var timer = setInterval(function () {
+            tries++;
+            if (patchSendImgUrls() || tries > 600) clearInterval(timer);
+        }, 100);
+    })();
+
 })();

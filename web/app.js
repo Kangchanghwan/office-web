@@ -16,7 +16,7 @@
 
     // Bump on every deploy: keys the Cache API entry for x2t.wasm, so users
     // re-download the converter exactly once per release.
-    var BUILD_VERSION = '1.2.3';
+    var BUILD_VERSION = '1.2.4';
     window.__OO_BUILD_VERSION = BUILD_VERSION;
 
     // ---------- config from URL ----------
@@ -120,9 +120,11 @@
     // reference glyphs missing from the page's subset fonts; the recompiled
     // x2t (GetFallbackFontForChar) resolves them from this font dir and
     // embeds the needed glyphs. Fetched lazily (only when merging real
-    // changes) and cached in memory. DroidSansFallbackFull covers CJK,
-    // DejaVuSans covers Latin/other.
+    // changes) and cached in memory. NotoSansSC covers BOTH Latin and CJK
+    // (the primary fallback for newly typed text); DroidSansFallbackFull
+    // (CJK) and DejaVuSans (Latin) are secondary fallbacks.
     var PDF_MERGE_FONTS = [
+        { url: 'vendor/pdf-fonts/NotoSansSC.ttf', name: 'NotoSansSC.ttf' },
         { url: 'vendor/pdf-fonts/DroidSansFallbackFull.ttf', name: 'DroidSansFallbackFull.ttf' },
         { url: 'vendor/pdf-fonts/DejaVuSans.ttf', name: 'DejaVuSans.ttf' }
     ];

@@ -16,8 +16,56 @@
 
     // Bump on every deploy: keys the Cache API entry for x2t.wasm, so users
     // re-download the converter exactly once per release.
-    var BUILD_VERSION = '1.2.7';
+    var BUILD_VERSION = '1.2.8';
     window.__OO_BUILD_VERSION = BUILD_VERSION;
+
+    // ---------- Service Worker cache version guard ----------
+    // The editor iframe's assets (notably offline-shim.js) are cached by the
+    // Service Worker with a cache-first strategy keyed on g_buildVersion
+    // (document_editor_service_worker.js). After a release, browsers that still
+    // run the old SW keep serving stale files — a hard refresh bypasses only
+    // the HTTP cache, not the SW cache. The entry pages (index/docx/...html)
+    // are served no-cache so they are always fresh: remember the last seen
+    // build version here, and when BUILD_VERSION changes delete the SW's
+    // document_editor_* caches, then reload once (guarded against loops).
+    function ensureFreshSwCache() {
+        var KEY = '__oo_build_seen';
+        var RELOAD_KEY = '__oo_build_reloaded';
+        var seen = null;
+        try { seen = localStorage.getItem(KEY); } catch (e) {}
+        if (seen === BUILD_VERSION) return Promise.resolve(false);   // unchanged
+
+        var deleteCaches = Promise.resolve();
+        if (window.caches && caches.keys) {
+            deleteCaches = caches.keys().then(function (keys) {
+                return Promise.all(keys
+                    .filter(function (k) { return k.indexOf('document_editor_') === 0; })
+                    .map(function (k) { return caches.delete(k); }));
+            }).catch(function () {});
+        }
+        return deleteCaches.then(function () {
+            // The current navigation may still be controlled by the old SW (the
+            // new one takes over after install/activate), so reload once to
+            // guarantee the user runs the new code. RELOAD_KEY makes it a
+            // one-shot per version. Anti-loop: only reload when the marker was
+            // actually written — in private mode / full storage setItem throws,
+            // and an unconditional reload would loop forever; without the
+            // marker we just clear caches and let the next navigation pick up
+            // the fresh files.
+            var alreadyReloaded = null;
+            try { alreadyReloaded = localStorage.getItem(RELOAD_KEY); } catch (e) {}
+            try { localStorage.setItem(KEY, BUILD_VERSION); } catch (e) {}
+            if (alreadyReloaded !== BUILD_VERSION) {
+                var markerWritten = false;
+                try { localStorage.setItem(RELOAD_KEY, BUILD_VERSION); markerWritten = true; } catch (e) {}
+                if (markerWritten) {
+                    window.location.reload();
+                    return true;   // reload triggered: abort boot
+                }
+            }
+            return false;
+        }).catch(function () { return false; });
+    }
 
     // ---------- config from URL ----------
     var PARAMS = {};
@@ -177,17 +225,37 @@
     }
 
     function x2tConvert(mod, inputBytes, fromExt, toExt, workName) {
-        resetWorking(mod);
+        // Only reset the working dir when converting TO bin (the open
+        // direction). With m_bIsNoBase64=false, x2t extracts the OOXML's
+        // images as files next to the bin (/working/media/<name>) and the bin
+        // references them by relative path; converting FROM bin (save/download)
+        // reads those same files back to embed the images into the output.
+        // Wiping /working before a save would therefore strip every image from
+        // the saved file. (The reference office.html simply never cleans
+        // /working; here the open-direction reset also clears the previous
+        // document's leftovers, which matters in the multi-document library.)
+        if (toExt === 'bin') resetWorking(mod);
         var inName = workName + '.' + fromExt;
         var outName = workName + '.' + toExt;
         fsWriteFile(mod, '/working/' + inName, inputBytes);
+        // m_bIsNoBase64 controls whether images are embedded into the bin or
+        // referenced as external paths:
+        //   - converting TO bin (open direction) must be false: embed the image
+        //     bytes into the bin so the editor can render them directly. With
+        //     true, the bin only holds references like `_offline_media/imageN.png`
+        //     and the editor would fetch that (nonexistent) directory -> 404,
+        //     no images.
+        //   - converting FROM bin (save/download direction) also stays false:
+        //     the bin already embeds the images and they are written back into
+        //     word/media/ etc., producing a self-contained file.
+        var noBase64 = false;
         var xml = '<?xml version="1.0" encoding="utf-8"?>' +
             '<TaskQueueDataConvert xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema">' +
             '<m_sFontDir>/working/fonts/</m_sFontDir>' +
             '<m_sThemeDir>/working/themes</m_sThemeDir>' +
             '<m_sFileFrom>/working/' + inName + '</m_sFileFrom>' +
             '<m_sFileTo>/working/' + outName + '</m_sFileTo>' +
-            '<m_bIsNoBase64>true</m_bIsNoBase64>' +
+            '<m_bIsNoBase64>' + noBase64 + '</m_bIsNoBase64>' +
             '<m_nCsvTxtEncoding>46</m_nCsvTxtEncoding>' +
             '<m_nCsvDelimiter>4</m_nCsvDelimiter>' +
             '</TaskQueueDataConvert>';
@@ -195,6 +263,98 @@
         var ret = mod.ccall('main1', 'number', ['string'], ['/working/params.xml']);
         if (ret !== 0) throw new Error('x2t conversion failed ret=' + ret);
         return mod.FS.readFile('/working/' + outName);
+    }
+
+    // ---------- OOXML media extraction (kills offline _offline_media 404s) ----------
+    // When opening a docx/xlsx/pptx offline, the editor asks for images by name
+    // (e.g. image1.png) under `_offline_media/` — a directory that does not
+    // exist -> 404. This extracts the */media/* images from the source OOXML
+    // into data: URLs up front, exposed as window.__ooMediaMap (exact filename
+    // -> dataURL) and window.__ooMediaMapByBase (extensionless basename ->
+    // {ext: dataURL} variant table); the iframe offline-shims use them to remap
+    // g_oDocumentUrls' `_offline_media/<name>` entries to data: URLs so the
+    // editor gets its images locally without network requests.
+    //
+    // Why the basename index: x2t changes image extensions when converting
+    // pptx->bin (source image1.jpeg, editor requests image1.jpg; SmartArt
+    // png/svg are swapped too), and pptx->bin does NOT embed media into the
+    // bin like docx does — pptx images rely entirely on this remap path.
+    // Exact-name matching fails on the extension change, hence the fallback.
+    // Minimal ZIP parsing (central directory only), no extra libraries.
+    function extractOoxmlMedia(bytes) {
+        var exact = {};   // exact filename -> dataURL
+        var base = {};    // extensionless basename -> { ext: dataURL } variants
+        try {
+            var dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+            // find the EOCD (End Of Central Directory, signature 0x06054b50) from the tail
+            var eocd = -1;
+            for (var i = bytes.length - 22; i >= 0 && i >= bytes.length - 22 - 65536; i--) {
+                if (dv.getUint32(i, true) === 0x06054b50) { eocd = i; break; }
+            }
+            if (eocd < 0) return Promise.resolve({ exact: exact, base: base });
+            var nEntries = dv.getUint16(eocd + 10, true);
+            var off = dv.getUint32(eocd + 16, true);   // central directory offset
+            var inflate = function (u8) {
+                var ds = new DecompressionStream('deflate-raw');
+                var stream = new Blob([u8]).stream().pipeThrough(ds);
+                return new Response(stream).arrayBuffer().then(function (buf) {
+                    return new Uint8Array(buf);
+                });
+            };
+            var jobs = [];
+            var decoder = new TextDecoder();
+            for (var e = 0; e < nEntries; e++) {
+                if (dv.getUint32(off, true) !== 0x02014b50) break;
+                var method = dv.getUint16(off + 10, true);
+                var cSize = dv.getUint32(off + 20, true);
+                var nameLen = dv.getUint16(off + 28, true);
+                var extraLen = dv.getUint16(off + 30, true);
+                var cmtLen = dv.getUint16(off + 32, true);
+                var lhOff = dv.getUint32(off + 42, true);
+                var name = decoder.decode(bytes.subarray(off + 46, off + 46 + nameLen));
+                off += 46 + nameLen + extraLen + cmtLen;
+                // only images under */media/* (skip videos and other large media)
+                var m = /(?:^|\/)media\/([^/]+)$/.exec(name);
+                if (!m) continue;
+                var fname = m[1];
+                var ext = (fname.split('.').pop() || '').toLowerCase();
+                if (ext === 'mp4' || ext === 'webm' || ext === 'mp3' || ext === 'wav') continue;
+                // read the local file header for the real data offset
+                if (dv.getUint32(lhOff, true) !== 0x04034b50) continue;
+                var lhNameLen = dv.getUint16(lhOff + 26, true);
+                var lhExtraLen = dv.getUint16(lhOff + 28, true);
+                var dataStart = lhOff + 30 + lhNameLen + lhExtraLen;
+                var raw = bytes.subarray(dataStart, dataStart + cSize);
+                (function (fname, ext, method, raw) {
+                    jobs.push(Promise.resolve().then(function () {
+                        if (method === 8) return inflate(raw);        // deflate
+                        if (method === 0) return raw;                 // stored
+                        return null;
+                    }).catch(function () { return null; }).then(function (data) {
+                        if (!data) return;
+                        var mime = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg',
+                                     gif: 'image/gif', svg: 'image/svg+xml', bmp: 'image/bmp',
+                                     webp: 'image/webp', emf: 'image/x-emf', wmf: 'image/x-wmf',
+                                     tiff: 'image/tiff', tif: 'image/tiff' }[ext] || 'application/octet-stream';
+                        var bin = '';
+                        for (var j = 0; j < data.length; j += 0x8000) {
+                            bin += String.fromCharCode.apply(null, data.subarray(j, j + 0x8000));
+                        }
+                        var dataUrl = 'data:' + mime + ';base64,' + btoa(bin);
+                        exact[fname] = dataUrl;
+                        // basename table: same name with different extensions (e.g.
+                        // image1.png + image1.svg, Word's emf/png fallback pairs) keeps
+                        // every variant keyed by extension; the remap prefers the variant
+                        // matching the requested extension so the right image wins.
+                        var b = fname.lastIndexOf('.') > 0 ? fname.slice(0, fname.lastIndexOf('.')) : fname;
+                        if (!(b in base)) base[b] = {};
+                        if (!(ext in base[b])) base[b][ext] = dataUrl;
+                    }));
+                })(fname, ext, method, raw);
+            }
+            return Promise.all(jobs).then(function () { return { exact: exact, base: base }; });
+        } catch (e) { /* extraction failure must not block opening */ }
+        return Promise.resolve({ exact: exact, base: base });
     }
 
     // ---------- PDF save: base PDF + compiled changes -> merged PDF ----------
@@ -513,12 +673,25 @@
             var bin = x2tConvert(mod, file.data, ext, 'bin', 'open');
             pendingBin = bin;
             window.__ooPendingDocBin = bin;
-            setStatus(t('Starting editor …'));
-            createEditor(ext, currentFile.name);
-            waitDocumentRendered(docType);
-            if (window.OOEditorState && window.OOEditorState._start) {
-                window.OOEditorState._start(ext, docType, currentFile.name);
-            }
+            // Extract the source OOXML's media (name -> data: URL) so the iframe
+            // offline-shims can remap `_offline_media/<name>` to data: URLs and
+            // kill the offline 404s. Awaited before createEditor: the editors
+            // register image URLs very early during loading, so the maps must
+            // be populated by then (failure/empty still opens fine — the bin
+            // already embeds the image data for docx/xlsx).
+            window.__ooMediaMap = {};
+            window.__ooMediaMapByBase = {};
+            return extractOoxmlMedia(file.data).then(function (media) {
+                window.__ooMediaMap = media.exact;
+                window.__ooMediaMapByBase = media.base;
+            }).catch(function () {}).then(function () {
+                setStatus(t('Starting editor …'));
+                createEditor(ext, currentFile.name);
+                waitDocumentRendered(docType);
+                if (window.OOEditorState && window.OOEditorState._start) {
+                    window.OOEditorState._start(ext, docType, currentFile.name);
+                }
+            });
         }).catch(function (e) {
             setStatus(t('Open failed: %s', (e && e.message || e)), true);
         });
@@ -876,6 +1049,8 @@
             if (ed) ed.innerHTML = '';
             pendingBin = null;
             window.__ooPendingDocBin = null;
+            window.__ooMediaMap = {};
+            window.__ooMediaMapByBase = {};
             documentReady = false;
             emptyDocGotReal = false;
             currentFile = null;
@@ -1010,6 +1185,15 @@
     // ---------- boot ----------
     function boot() {
         translateShell();
+        // SW cache version guard first: on a version change it clears the
+        // editor caches and reloads once (see ensureFreshSwCache). If it
+        // triggered the reload, abort — the fresh page will boot normally.
+        ensureFreshSwCache().then(function (reloading) {
+            if (!reloading) bootMain();
+        });
+    }
+
+    function bootMain() {
         loadX2t().catch(function () {});
 
         // message bridge from the editor iframe

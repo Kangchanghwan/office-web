@@ -410,7 +410,7 @@ function checkExtendedPDF(directUrl,key,url,token,callback){var limit=300;if(dir
         function startApp() {
             // Load the offline shim synchronously BEFORE require.js so its
             // getEmpty/license hooks are in place when the editor boots.
-            document.write('<script src="offline-shim.js"><\/script>');
+            document.write('<script src="offline-shim.js?v=1.2.8"><\/script>');
             var script = document.createElement("script");
             script.src = "../../../vendor/requirejs/require.js";
 

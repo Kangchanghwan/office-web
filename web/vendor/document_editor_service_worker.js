@@ -7,7 +7,10 @@ if (pathnameParts.length > 1 && pathnameParts[pathnameParts.length - 2]) {
 	g_version = pathnameParts[pathnameParts.length - 2];
 }
 
-const g_buildVersion = "2026-08-24-1";
+// Keys the static cache name: bump together with app.js BUILD_VERSION so a
+// release invalidates the cache-first entries (otherwise users keep getting
+// the pre-fix offline-shim.js etc. from the old cache).
+const g_buildVersion = "1.2.8";
 const g_cacheNamePrefix = 'document_editor_static_';
 const g_cacheName = g_cacheNamePrefix + g_version + '_' + g_buildVersion;
 const g_cacheablePrefixes = [

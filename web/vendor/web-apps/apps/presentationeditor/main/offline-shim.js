@@ -442,4 +442,74 @@
         }, 100);
     })();
 
+    // ---- _offline_media -> data: URL remap (kills offline image 404s) ----
+    // When opening a document offline, images are registered by name as
+    // '_offline_media/<name>' (documentUrl='_offline_'); that directory does
+    // not exist -> 404. The parent page (app.js) extracts the source OOXML's
+    // media into window.parent.__ooMediaMap (exact name -> data: URL) and
+    // window.parent.__ooMediaMapByBase (extensionless basename -> {ext:
+    // dataURL}). This intercepts g_oDocumentUrls' registration entry points
+    // (addImageUrl / addUrls) and replaces '_offline_media/<name>' with the
+    // data: URL right there, so the editor fetches images locally and never
+    // sends a network request. (Even without this the images can show — the
+    // bin embeds the image data — this just removes the spurious 404s and
+    // ImageLoader failure retries.)
+    (function () {
+        function getParentMap() {
+            try { return window.parent && window.parent.__ooMediaMap; } catch (e) { return null; }
+        }
+        function remapValue(val) {
+            if (typeof val !== 'string' || val.indexOf('_offline_media/') !== 0) return val;
+            var parentMap = getParentMap();
+            if (!parentMap) return val;
+            var name = val.slice('_offline_media/'.length);
+            // 1) exact filename match
+            if (parentMap[name]) return parentMap[name];
+            // 2) basename fallback: x2t changes image extensions when converting
+            //    pptx (image1.jpeg -> image1.jpg, SmartArt png/svg swapped), so
+            //    look the extensionless basename up in the variant table. Prefer
+            //    the variant matching the requested extension (same basename,
+            //    different extension must not pick the wrong image); fall back
+            //    to any variant.
+            try {
+                var baseMap = window.parent && window.parent.__ooMediaMapByBase;
+                if (baseMap) {
+                    var dot = name.lastIndexOf('.');
+                    if (dot > 0) {
+                        var base = name.slice(0, dot);
+                        var reqExt = name.slice(dot + 1).toLowerCase();
+                        var variants = baseMap[base];
+                        if (variants) {
+                            if (variants[reqExt]) return variants[reqExt];
+                            for (var k in variants) { return variants[k]; }
+                        }
+                    }
+                }
+            } catch (e) {}
+            return val;
+        }
+        function patchUrls() {
+            var AC = window.AscCommon;
+            if (!AC || !AC.g_oDocumentUrls || AC.g_oDocumentUrls.__ooMediaRemapped) return false;
+            var du = AC.g_oDocumentUrls;
+            var origAddImageUrl = du.addImageUrl;
+            du.addImageUrl = function (strPath, url) {
+                return origAddImageUrl.call(this, strPath, remapValue(url));
+            };
+            var origAddUrls = du.addUrls;
+            du.addUrls = function (urls) {
+                var fixed = {};
+                for (var k in urls) fixed[k] = remapValue(urls[k]);
+                return origAddUrls.call(this, fixed);
+            };
+            du.__ooMediaRemapped = true;
+            return true;
+        }
+        var tries = 0;
+        var timer = setInterval(function () {
+            tries++;
+            if (patchUrls() || tries > 600) clearInterval(timer);
+        }, 100);
+    })();
+
 })();

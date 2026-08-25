@@ -56,8 +56,19 @@ _GZIP_CACHE_MAX = 64
 CACHE_LONG = 'public, max-age=2592000'      # 30 days
 CACHE_REVALIDATE = 'no-cache'               # may cache, must revalidate
 
+# Release-critical scripts that must NEVER be cached long-term: offline-shim.js
+# carries the offline fixes and the Service Worker script keys its cache on
+# g_buildVersion — a stale copy means users keep running pre-fix code even
+# after a deploy (the SW cache-first layer alone already caused this once).
+NO_CACHE_BASENAMES = {'offline-shim.js', 'document_editor_service_worker.js'}
+
 
 def cache_policy(path):
+    base = os.path.basename(path.split('?', 1)[0])
+    if base.endswith('.br'):
+        base = base[:-3]
+    if base in NO_CACHE_BASENAMES:
+        return CACHE_REVALIDATE
     ext = os.path.splitext(path)[1].lower()
     if ext in ('.html', '.htm'):
         return CACHE_REVALIDATE

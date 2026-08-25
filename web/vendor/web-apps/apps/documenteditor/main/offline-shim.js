@@ -512,4 +512,95 @@
         }, 100);
     })();
 
+    // ---- offline image upload: short-circuit UploadImageFiles ----
+    // The stock AscCommon.UploadImageFiles POSTs the picked file(s) to the
+    // Document Server upload endpoint (../../../../upload/<docId>). Offline
+    // there is no such endpoint, so the XHR fails and the editor reports
+    // UplImageUrl ("Image URL is incorrect") — Insert > Image > From File
+    // (and the watermark / OLE image pickers) all break, while pasting an
+    // image works because paste never goes through the upload service.
+    // Read the file locally with FileReader and hand the rest of the pipeline
+    // a data: URL under the same shape the server would answer with
+    // ({ "media/<name>": url }): g_oDocumentUrls gets a proper media/ path,
+    // ImageLoader renders it, and the bin writer embeds it on save.
+    (function () {
+        function fileToDataUrl(file) {
+            return new Promise(function (resolve, reject) {
+                var fr = new FileReader();
+                fr.onload = function () { resolve(fr.result); };
+                fr.onerror = function () { reject(fr.error || new Error('read failed')); };
+                fr.readAsDataURL(file);
+            });
+        }
+        // extension from the picked file's name; fall back to the data URL's
+        // mime (data:image/png;base64,... -> png)
+        function extOf(file, dataUrl) {
+            var name = file && file.name;
+            var dot = name ? name.lastIndexOf('.') : -1;
+            if (dot > 0 && dot < name.length - 1) return name.slice(dot + 1).toLowerCase();
+            var m = /^data:image\/([a-z0-9.+-]+)/i.exec(dataUrl || '');
+            if (m) {
+                var e = m[1].toLowerCase();
+                if (e === 'svg+xml') return 'svg';
+                if (e === 'jpeg') return 'jpg';
+                return e;
+            }
+            return 'png';
+        }
+        // a media/ name that does not collide with anything already
+        // registered (reusing a name would overwrite urlsReverse and corrupt
+        // the image the old entry belonged to) nor with names already handed
+        // out in the current batch (`used`).
+        function uniqueMediaName(du, ext, used) {
+            var n = (du && typeof du.imageCount === 'number') ? du.imageCount + 1 : 1;
+            var name;
+            do {
+                name = 'image' + n + '.' + ext;
+                n++;
+            } while ((du && du.urls && du.urls['media/' + name] !== undefined) || used[name]);
+            used[name] = true;
+            return name;
+        }
+        function patchUploadImageFiles() {
+            var AC = window.AscCommon;
+            if (!AC || !AC.UploadImageFiles || AC.__ooUploadImageFilesPatched) return false;
+            AC.UploadImageFiles = function (files, documentId, documentUserId, jwt, shardKey, wopiSrc, userSessionId, callback) {
+                var ERR = (window.Asc && window.Asc.c_oAscError && window.Asc.c_oAscError.ID) || {};
+                try {
+                    if (files && files.length) {
+                        var list = [];
+                        for (var i = 0; i < files.length; i++) list.push(files[i]);
+                        Promise.all(list.map(fileToDataUrl)).then(function (urls) {
+                            // register like the server's { "media/<name>": url }
+                            // answer so getImageLocal/getImageUrl keep working
+                            var du = AC.g_oDocumentUrls;
+                            var out = {};
+                            var used = {};
+                            for (var k = 0; k < urls.length; k++) {
+                                var name = uniqueMediaName(du, extOf(list[k], urls[k]), used);
+                                out['media/' + name] = urls[k];
+                            }
+                            if (du && du.addUrls) du.addUrls(out);
+                            callback(ERR.No === undefined ? 0 : ERR.No, urls);
+                        }).catch(function () {
+                            callback(ERR.UplImageUrl === undefined ? -13 : ERR.UplImageUrl);
+                        });
+                        return;
+                    }
+                    callback(ERR.UplImageFileCount === undefined ? -15 : ERR.UplImageFileCount);
+                    return;
+                } catch (e) {
+                    callback(ERR.UplImageUrl === undefined ? -13 : ERR.UplImageUrl);
+                }
+            };
+            AC.__ooUploadImageFilesPatched = true;
+            return true;
+        }
+        var tries = 0;
+        var timer = setInterval(function () {
+            tries++;
+            if (patchUploadImageFiles() || tries > 600) clearInterval(timer);
+        }, 100);
+    })();
+
 })();

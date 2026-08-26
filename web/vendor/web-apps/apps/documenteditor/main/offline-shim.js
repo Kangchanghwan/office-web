@@ -375,17 +375,25 @@
     })();
 
 
-    // ---- offline image resolution: short-circuit sendImgUrls ----
+    // ---- offline image resolution: FULL short-circuit of sendImgUrls ----
     // The stock AscCommon.sendImgUrls POSTs an "imgurls" command to the
-    // Document Server and parks the work on api.fCurCallback until the server
-    // answers. Offline there is no server, so the callback never fires: the
-    // image is never mapped for rendering and sync_StartAction(LoadImage) is
-    // left without its sync_EndAction (the stuck "Loading Image" mask). This
-    // hits "Insert image from URL" (user-supplied http(s) URL) and any
-    // already-local data:/blob: URL. Resolve both locally: data:/blob: URLs
-    // pass through; http(s) URLs are fetched and converted to data: URLs
-    // (CORS permitting — a failed fetch yields the SDK's standard 'error'
-    // entry instead of hanging).
+    // Document Server, first opens sync_StartAction(BlockInteraction,
+    // LoadImage) — a blocking "Loading Image" mask — then parks the work on
+    // api.fCurCallback waiting for the server. Offline there is no server, so
+    // the callback never fires and the mask is stuck forever.
+    // Therefore resolve EVERY url locally and never fall through to the
+    // original (any relative / special-scheme url would otherwise trigger the
+    // freeze):
+    //   data:/blob:      -> pass through;
+    //   http(s):         -> fetch and convert to a data: URL (CORS permitting;
+    //                       a failed fetch yields the SDK's 'error' marker);
+    //   relative path    -> look up g_oDocumentUrls (the _offline_media remap
+    //                       table) for a data: URL; not found -> 'error';
+    //   other schemes    -> (ascdesktop://, file://, ...) unreachable offline
+    //                       -> 'error'.
+    // 'error' is the SDK's failure marker: callers seeing url==='error' skip
+    // that image without blocking, and since we never call the original the
+    // blocking mask is never opened — no freeze.
     (function () {
         function isLocalUrl(u) {
             return typeof u === 'string' &&
@@ -408,29 +416,43 @@
                 });
             });
         }
+        // relative / special urls: consult the g_oDocumentUrls remap table
+        // (_offline_media -> data:); use it when it resolves to a usable
+        // data:/blob: URL, otherwise treat as unavailable.
+        function resolveNonHttp(u) {
+            try {
+                var AC = window.AscCommon;
+                if (AC && AC.g_oDocumentUrls && AC.g_oDocumentUrls.getImageUrl) {
+                    var mapped = AC.g_oDocumentUrls.getImageUrl(u);
+                    if (mapped && mapped.indexOf('data:') === 0) return mapped;
+                    if (mapped && mapped.indexOf('blob:') === 0) return mapped;
+                }
+            } catch (e) {}
+            return 'error';
+        }
         function patchSendImgUrls() {
             var AC = window.AscCommon;
             if (!AC || !AC.sendImgUrls || AC.__ooSendImgUrlsPatched) return false;
-            var original = AC.sendImgUrls;
             AC.sendImgUrls = function (api, images, callback, bNotShowError, token) {
                 try {
-                    if (images && images.length && images.every(function (u) {
-                            return isLocalUrl(u) || isHttpUrl(u);
-                        })) {
-                        // Resolve locally with the same {url, path} shape the
-                        // server would return. data: URLs need no
-                        // g_oDocumentUrls mapping (getFullImageSrc2 returns
-                        // them unchanged), so url == path == the data URL.
+                    if (images && images.length) {
                         Promise.all(images.map(function (u) {
                             if (isLocalUrl(u)) return Promise.resolve(u);
-                            return urlToDataUrl(u).catch(function () { return 'error'; });
+                            if (isHttpUrl(u)) return urlToDataUrl(u).catch(function () { return 'error'; });
+                            return Promise.resolve(resolveNonHttp(u));
                         })).then(function (resolved) {
                             callback(resolved.map(function (u) { return { url: u, path: u }; }));
+                        }).catch(function () {
+                            callback(images.map(function () { return { url: 'error', path: null }; }));
                         });
                         return;
                     }
-                } catch (e) { /* fall through to the original */ }
-                return original.apply(this, arguments);
+                    // empty list: callback with an empty array by convention
+                    callback([]);
+                    return;
+                } catch (e) {
+                    try { callback((images || []).map(function () { return { url: 'error', path: null }; })); } catch (e2) {}
+                }
             };
             AC.__ooSendImgUrlsPatched = true;
             return true;

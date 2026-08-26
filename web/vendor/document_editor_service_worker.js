@@ -10,7 +10,7 @@ if (pathnameParts.length > 1 && pathnameParts[pathnameParts.length - 2]) {
 // Keys the static cache name: bump together with app.js BUILD_VERSION so a
 // release invalidates the cache-first entries (otherwise users keep getting
 // the pre-fix offline-shim.js etc. from the old cache).
-const g_buildVersion = "1.2.9";
+const g_buildVersion = "1.2.10";
 const g_cacheNamePrefix = 'document_editor_static_';
 const g_cacheName = g_cacheNamePrefix + g_version + '_' + g_buildVersion;
 const g_cacheablePrefixes = [

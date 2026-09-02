@@ -33,7 +33,7 @@ COPY scripts/extract-fonts.py /app/scripts/extract-fonts.py
 # so the server serves them with zero runtime CPU cost. Requires brotli.
 RUN pip install --no-cache-dir brotli fonttools \
     && python /app/scripts/extract-fonts.py /app/web/vendor/fonts /app/build/fonts \
-        --deploy /app \
+        --deploy /app/web \
     && python /app/precompress.py --root /app/web --min-size 4096 --quiet
 
 ENV PORT=8080

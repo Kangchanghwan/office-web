@@ -16,7 +16,7 @@
 
     // Bump on every deploy: keys the Cache API entry for x2t.wasm, so users
     // re-download the converter exactly once per release.
-    var BUILD_VERSION = '1.2.10';
+    var BUILD_VERSION = '1.2.11';
     window.__OO_BUILD_VERSION = BUILD_VERSION;
 
     // ---------- Service Worker cache version guard ----------
@@ -447,6 +447,122 @@
         });
     }
 
+    // ---------- PDF export from the editors: render bin -> wasm CPdfFile -> PDF ----------
+    // "Download As PDF" on docx/xlsx/pptx sends a *render bin* from the iframe
+    // (sdkjs asc_nativeGetPDF output, the same drawing-command stream the
+    // Document Server feeds to CPdfFile). Reuse the same C++ code from the
+    // self-compiled x2t.wasm via the x2t_render_bin_to_pdf_file export.
+    // From the render bin, extract the font names used by text (the
+    // ctFontName=41 command: [41][len:2][utf16 chars]) so the PDF embeds the
+    // same faces the page renders with, instead of a Helvetica fallback.
+    function parseRenderBinFonts(bin) {
+        var fonts = {};
+        var names = [];
+        // DataView to tolerate unaligned utf16 (ctFontName payload can start
+        // at an odd offset; Uint16Array would throw)
+        var dv = bin.buffer && bin.byteOffset !== undefined
+            ? new DataView(bin.buffer, bin.byteOffset, bin.byteLength) : null;
+        if (!dv) return names;
+        var scanLen = Math.min(bin.length, 1024 * 1024);
+        for (var i = 0; i < scanLen - 3; i++) {
+            if (bin[i] === 0x29) {   // 41 = ctFontName
+                var nChars = dv.getUint16(i + 1, true);
+                var nBytes = nChars * 2;
+                if (nBytes > 0 && nBytes < 400 && i + 3 + nBytes <= bin.length) {
+                    var name = '';
+                    for (var k = 0; k < nChars; k++) name += String.fromCharCode(dv.getUint16(i + 3 + k * 2, true));
+                    if (/^[\x20-\x7E]+$/.test(name) && /[a-zA-Z]/.test(name) && !fonts[name]) {
+                        fonts[name] = true;
+                        names.push(name);
+                    }
+                    i += 2 + nBytes;   // skip what was just read
+                }
+            }
+        }
+        return names;
+    }
+
+    // Fetch the standard ttf/otf the render bin needs from vendor/decoded-fonts/
+    // (the XOR-decoded font pool; name -> file mapping in fonts-index.json).
+    // Missing names are skipped — the wasm side falls back to the faces staged
+    // so far (see PDF_MERGE_FONTS for the always-supplied pool).
+    var __fontsIndexPromise = null;
+    function getFontsIndex() {
+        if (!__fontsIndexPromise) {
+            __fontsIndexPromise = fetch('vendor/decoded-fonts/fonts-index.json')
+                .then(function (r) { return r.ok ? r.json() : {}; })
+                .catch(function () { return {}; });
+        }
+        return __fontsIndexPromise;
+    }
+
+    function x2tRenderBinToPdf(mod, renderBin) {
+        var FS = mod.FS;
+        try { FS.mkdir('/working'); } catch (e) {}
+        try { FS.mkdir('/working/fonts'); } catch (e) {}
+        try { FS.mkdir('/working/pdf_tmp'); } catch (e) {}
+        var fontsDir = '/working/fonts';
+        var getFont = function (name) {
+            return fetch('vendor/decoded-fonts/' + name)
+                .then(function (r) { return r.ok ? r.arrayBuffer() : null; })
+                .then(function (buf) { return buf ? new Uint8Array(buf) : null; })
+                .catch(function () { return null; });
+        };
+
+        // 1) font names used by the render bin -> files from fonts-index.json
+        return getFontsIndex().then(function (index) {
+            var needed = parseRenderBinFonts(renderBin);
+            var wanted = {};   // index file -> {outName, ext}
+            needed.forEach(function (name) {
+                var entries = index[name.toLowerCase()];
+                if (!entries || !entries.length) return;
+                // prefer the Regular-weight entry (full == family)
+                var entry = entries[0];
+                for (var j = 0; j < entries.length; j++) {
+                    if (entries[j].full === name) { entry = entries[j]; break; }
+                }
+                if (wanted[entry.file]) return;
+                var ext = entry.kind === 'otf' ? 'otf' : (entry.kind === 'ttc' ? 'ttc' : 'ttf');
+                wanted[entry.file] = {
+                    outName: name.replace(/[\s/\\]/g, '') + '.' + ext,
+                    url: 'vendor/decoded-fonts/' + entry.file + '.' + ext
+                };
+            });
+            var fetches = Object.keys(wanted).map(function (file) {
+                return getFont(wanted[file].url.split('/').pop()).then(function (data) {
+                    return { name: wanted[file].outName, data: data };
+                });
+            });
+            return Promise.all(fetches);
+        }).then(function (fetchedList) {
+            // 2) stage the fonts: the decoded pool + the fixed merge pool (so
+            // text whose family is not in the pool still embeds correctly)
+            return loadPdfMergeFonts().then(function (mergeFonts) {
+                fetchedList.forEach(function (f) {
+                    if (f && f.data) fsWriteFile(mod, fontsDir + '/' + f.name, f.data);
+                });
+                mergeFonts.forEach(function (f) {
+                    fsWriteFile(mod, fontsDir + '/' + f.name, f.data);
+                });
+
+                // 3) the render bin goes through the wasm FS, not ccall('array'):
+                //    emscripten's 'array' argument stackAlloc's the whole bin on
+                //    the 8MB wasm stack — complex decks' render bins exceed that
+                //    and trap with "memory access out of bounds" (7.5MB passes,
+                //    9MB crashes). Writing to FS puts it on the heap: no limit.
+                FS.writeFile('/working/pdf_tmp/render.bin', renderBin);
+                var ret = mod.ccall('x2t_render_bin_to_pdf_file', 'number',
+                    ['string', 'string', 'string'],
+                    ['/working/pdf_tmp/render.bin', fontsDir + '/', '/working/pdf_tmp/out.pdf']);
+                if (ret !== 0) throw new Error('PDF conversion failed ret=' + ret);
+                var pdf = FS.readFile('/working/pdf_tmp/out.pdf');
+                try { FS.unlink('/working/pdf_tmp/render.bin'); } catch (e) {}
+                try { FS.unlink('/working/pdf_tmp/out.pdf'); } catch (e) {}
+                return pdf.slice();   // detach from the wasm heap view
+            });
+        });
+    }
+
     // ---------- document type helpers ----------
     var CELL_EXTS = ['xls', 'xlsx', 'xlsm', 'ods', 'csv'];
     var SLIDE_EXTS = ['ppt', 'pptx', 'odp', 'ppsx'];
@@ -872,6 +988,11 @@
                 msg.changes ? new Uint8Array(msg.changes) : null)
                 .then(function (merged) { return merged.slice(); })
                 .catch(function () { pdfFallback = true; return pdfBase.slice(); });
+        } else if (msg.format === 513) {
+            // docx/xlsx/pptx "Download As PDF": the iframe sends the render
+            // bin (sdkjs asc_nativeGetPDF output) -> wasm CPdfFile writes it.
+            bytesPromise = window.__x2tReadyPromise
+                .then(function (mod) { return x2tRenderBinToPdf(mod, new Uint8Array(msg.buffer)); });
         } else {
             bytesPromise = window.__x2tReadyPromise.then(function (mod) {
                 var bin = new Uint8Array(msg.buffer);

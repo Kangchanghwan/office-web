@@ -792,7 +792,17 @@
 
         window.__x2tReadyPromise.then(function (mod) {
             setStatus(t('Converting document …'));
-            var bin = x2tConvert(mod, file.data, ext, 'bin', 'open');
+            // [cs] x2t 10.0 fails doc/ppt/xls -> bin directly (ret=88) for some
+            // legacy files while legacy -> OOXML works; retry through OOXML.
+            var bin;
+            try {
+                bin = x2tConvert(mod, file.data, ext, 'bin', 'open');
+            } catch (e) {
+                var via = { doc: 'docx', dot: 'docx', ppt: 'pptx', pps: 'pptx', xls: 'xlsx', xlt: 'xlsx' }[ext];
+                if (!via) throw e;
+                var ooxml = x2tConvert(mod, file.data, ext, via, 'legacy').slice();
+                bin = x2tConvert(mod, ooxml, via, 'bin', 'open');
+            }
             pendingBin = bin;
             window.__ooPendingDocBin = bin;
             // Extract the source OOXML's media (name -> data: URL) so the iframe

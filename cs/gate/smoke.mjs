@@ -29,8 +29,8 @@ import { execFileSync } from 'node:child_process';
 function zipHas(b, text) {
   const p = path.join(OUTDIR, 'tmp.zip'); fs.writeFileSync(p, b);
   const out = execFileSync('python3', ['-c',
-    'import zipfile,sys;z=zipfile.ZipFile(sys.argv[1]);print("".join(z.read(n).decode("utf-8","ignore") for n in z.namelist() if n.endswith(".xml")))', p]).toString();
-  return out.includes(text);
+    'import zipfile,sys;z=zipfile.ZipFile(sys.argv[1]);t=sys.argv[2];print(any(t in z.read(n).decode("utf-8","ignore") for n in z.namelist() if n.endswith(".xml")))', p, text]).toString().trim();
+  return out === 'True';
 }
 
 const browser = await chromium.launch();

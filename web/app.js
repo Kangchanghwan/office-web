@@ -739,10 +739,10 @@
                 lang: UI_LANG,
                 canCoAuthoring: false,
                 user: { id: 'local-user', name: 'Local User' },
-                customization: { about: false, feedback: false, autosave: false },
                 // [cs] spell-check dictionaries are not shipped; without them every
                 // word is underlined, so start with spell checking off.
-                features: { spellcheck: { mode: false } }
+                customization: { about: false, feedback: false, autosave: false,
+                                 features: { spellcheck: { mode: false, change: true } } }
             },
             events: {
                 onAppReady: function () {},

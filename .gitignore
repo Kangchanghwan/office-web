@@ -14,3 +14,8 @@ build/
 .DS_Store
 *.log
 *.py[cod]
+.cs-work/
+out/
+cs/gate/out/
+cs/gate/report.json
+node_modules/

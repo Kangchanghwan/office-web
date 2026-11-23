@@ -16,7 +16,7 @@
 
     // Bump on every deploy: keys the Cache API entry for x2t.wasm, so users
     // re-download the converter exactly once per release.
-    var BUILD_VERSION = '1.2.11';
+    var BUILD_VERSION = '10.0.0-cs1';
     window.__OO_BUILD_VERSION = BUILD_VERSION;
 
     // ---------- Service Worker cache version guard ----------
@@ -156,7 +156,7 @@
             var el = document.querySelector(sel);
             if (el && dict[key]) el.setAttribute('title', dict[key]);
         }
-        setText('.subtitle', 'Open, edit and save Office documents entirely in your browser.');
+        // [cs] subtitle is Korean static text in index.html
         setText('#upload-btn', '📂 Open a file');
         setText('[data-new="docx"]', '＋ Document');
         setText('[data-new="xlsx"]', '＋ Spreadsheet');
@@ -385,6 +385,12 @@
     //   NotoNaskhArabic (Arabic), LohitDevanagari (Devanagari/Hindi),
     //   NanumGothic (Korean), FreeSerif (Thai + many others).
     var PDF_MERGE_FONTS = [
+        // [cs] Latin text typed into a PDF is set in Arial; without a matching
+        // face in /working/fonts x2t 10.0 maps the glyphs with an offset
+        // (L -> N). Liberation Sans is the open, metric-compatible Arial face
+        // of the font catalog (decoded-fonts index: 062 regular, 059 bold).
+        { url: 'vendor/decoded-fonts/062.ttf', name: 'LiberationSans-Regular.ttf' },
+        { url: 'vendor/decoded-fonts/059.ttf', name: 'LiberationSans-Bold.ttf' },
         { url: 'vendor/pdf-fonts/NotoSansSC.ttf', name: 'NotoSansSC.ttf' },
         { url: 'vendor/pdf-fonts/DroidSansFallbackFull.ttf', name: 'DroidSansFallbackFull.ttf' },
         { url: 'vendor/pdf-fonts/DejaVuSans.ttf', name: 'DejaVuSans.ttf' },
@@ -733,7 +739,10 @@
                 lang: UI_LANG,
                 canCoAuthoring: false,
                 user: { id: 'local-user', name: 'Local User' },
-                customization: { about: false, feedback: false, autosave: false }
+                // [cs] spell-check dictionaries are not shipped; without them every
+                // word is underlined, so start with spell checking off.
+                customization: { about: false, feedback: false, autosave: false,
+                                 features: { spellcheck: { mode: false, change: true } } }
             },
             events: {
                 onAppReady: function () {},
@@ -786,7 +795,17 @@
 
         window.__x2tReadyPromise.then(function (mod) {
             setStatus(t('Converting document …'));
-            var bin = x2tConvert(mod, file.data, ext, 'bin', 'open');
+            // [cs] x2t 10.0 fails doc/ppt/xls -> bin directly (ret=88) for some
+            // legacy files while legacy -> OOXML works; retry through OOXML.
+            var bin;
+            try {
+                bin = x2tConvert(mod, file.data, ext, 'bin', 'open');
+            } catch (e) {
+                var via = { doc: 'docx', dot: 'docx', ppt: 'pptx', pps: 'pptx', xls: 'xlsx', xlt: 'xlsx' }[ext];
+                if (!via) throw e;
+                var ooxml = x2tConvert(mod, file.data, ext, via, 'legacy').slice();
+                bin = x2tConvert(mod, ooxml, via, 'bin', 'open');
+            }
             pendingBin = bin;
             window.__ooPendingDocBin = bin;
             // Extract the source OOXML's media (name -> data: URL) so the iframe
@@ -955,7 +974,7 @@
     // ---------- offline download-as bridge ----------
     var OFFLINE_FORMAT_EXT = {
         65: 'docx', 67: 'odt', 68: 'rtf', 69: 'txt',
-        257: 'xlsx', 259: 'ods', 260: 'csv',
+        257: 'xlsx', 258: 'xls', 259: 'ods', 260: 'csv',
         129: 'pptx', 131: 'odp',
         513: 'pdf'
     };
@@ -1143,7 +1162,7 @@
         var ed = document.getElementById('editor');
         if (ed) ed.style.display = 'none';
         showTitlebar(false);
-        document.title = 'Office Web';
+        document.title = 'Clipboard Share 문서 편집기';
         refreshLibrary();
     }
     function hideHome() {
@@ -1217,7 +1236,7 @@
             var total = parseInt(resp.headers.get('Content-Length'), 10) || 0;
             if (!resp.body) {
                 setStatus('Downloading converter …');
-                return resp.arrayBuffer();
+                return resp.arrayBuffer().then(function (ab) { return gunzipIfNeeded(new Uint8Array(ab)); });
             }
             var reader = resp.body.getReader();
             var chunks = [], received = 0, lastUi = 0;
@@ -1240,16 +1259,26 @@
                 var buf = new Uint8Array(received);
                 var pos = 0;
                 chunks.forEach(function (c) { buf.set(c, pos); pos += c.length; });
-                return buf.buffer;
+                return gunzipIfNeeded(buf);
             });
         });
+    }
+
+    // [cs] x2t.wasm (10.0, ~70MB) exceeds the 25MiB per-file limit of the
+    // static host, so it ships gzip-compressed. Decompress in the browser unless
+    // the host already removed the gzip layer (check the 1f 8b magic bytes).
+    function gunzipIfNeeded(u8) {
+        if (!(u8[0] === 0x1f && u8[1] === 0x8b)) return Promise.resolve(u8.buffer);
+        setStatus('Unpacking converter …');
+        var stream = new Blob([u8]).stream().pipeThrough(new DecompressionStream('gzip'));
+        return new Response(stream).arrayBuffer();
     }
 
     // Fetch x2t.wasm, serving it from the Cache API when possible. The entry
     // is keyed by BUILD_VERSION, so a new deployment (which bumps the version)
     // downloads the new wasm exactly once and old entries are dropped.
     function fetchWasmWithProgress() {
-        var url = X2T_DIR + 'x2t.wasm';
+        var url = X2T_DIR + 'x2t.wasm.gz';
         var cacheKey = X2T_DIR + 'x2t.wasm#v' + BUILD_VERSION;
         var cachePromise = (window.caches && caches.open)
             ? caches.open('oo-x2t-v1').catch(function () { return null; })

@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Office Web</title>
+    <title>Clipboard Share 문서 편집기</title>
     <link rel="icon" href="assets/favicon.ico" type="image/x-icon"/>
     <script src="vendor/web-apps/apps/api/documents/api.js"></script>
     <style>
@@ -114,24 +114,31 @@
 <body>
     <!-- home screen: file library + open/create -->
     <div id="home">
-        <h1>Office Web</h1>
-        <div class="subtitle">Open, edit and save Office documents entirely in your browser.</div>
+        <h1>문서 편집기</h1>
+        <div class="subtitle">Word, Excel, PowerPoint, PDF 파일을 브라우저 안에서 열고 고치고 저장합니다. 파일은 서버로 올라가지 않습니다.<br>한글(hwp, hwpx) 파일은 <a href="https://hwp.clipboardapp.org/">한글 편집기</a>에서 여세요.</div>
         <div class="home-actions">
-            <button class="btn primary" id="upload-btn">📂 Open a file</button>
+            <button class="btn primary" id="upload-btn">📂 파일 열기</button>
         </div>
         <div class="home-actions" id="new-actions">
-            <button class="btn" data-new="docx">＋ Document</button>
-            <button class="btn" data-new="xlsx">＋ Spreadsheet</button>
-            <button class="btn" data-new="pptx">＋ Presentation</button>
-            <button class="btn" data-new="pdf">＋ PDF</button>
+            <button class="btn" data-new="docx">＋ 새 문서</button>
+            <button class="btn" data-new="xlsx">＋ 새 스프레드시트</button>
+            <button class="btn" data-new="pptx">＋ 새 프레젠테이션</button>
+            <button class="btn" data-new="pdf">＋ 새 PDF</button>
         </div>
         <input type="file" id="upload-input"
                accept=".docx,.doc,.xlsx,.xls,.pptx,.ppt,.pdf,.odt,.ods,.odp,.csv,.rtf,.txt">
         <div id="library-toolbar">
             <span class="library-count"></span>
-            <button id="clear-all-btn" title="Delete all files">🗑 Delete all</button>
+            <button id="clear-all-btn" title="Delete all files">🗑 모두 삭제</button>
         </div>
         <div id="file-list"></div>
+        <p class="cs-notice" style="margin-top:32px;font-size:12px;color:#777;line-height:1.6">
+            이 편집기는 ONLYOFFICE Docs 10.0 편집기와 <a href="https://github.com/wasmtools/office-web">wasmtools/office-web</a>을 고친 판으로,
+            GNU AGPL-3.0으로 배포됩니다. 보증은 없습니다.
+            소스 코드: <a href="https://github.com/Kangchanghwan/office-web">github.com/Kangchanghwan/office-web</a>
+            · 글꼴 라이선스: <a href="/licenses/font-licenses.md">font-licenses.md</a><br>
+            ONLYOFFICE는 Ascensio System SIA의 상표이며, 이 사이트는 공식 제품이 아닙니다.
+        </p>
     </div>
 
     <!-- title bar shown while a document is open -->

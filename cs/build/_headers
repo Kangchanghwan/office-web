@@ -1,0 +1,13 @@
+/*
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: strict-origin-when-cross-origin
+  Content-Security-Policy: frame-ancestors 'self' https://clipboardapp.org https://www.clipboardapp.org
+
+/*.html
+  Cache-Control: no-cache
+
+/
+  Cache-Control: no-cache
+
+/vendor/*
+  Cache-Control: public, max-age=86400

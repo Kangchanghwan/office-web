@@ -36,7 +36,8 @@ function zipHas(b, text) {
 const browser = await chromium.launch();
 const results = [];
 let failed = 0;
-for (const c of CASES) {
+const REPEAT = Number(process.env.GATE_REPEAT || 2); // 로드 순서 경합을 잡으려고 두 번씩
+for (const c of CASES.flatMap(c => Array(REPEAT).fill(c))) {
   const ctx = await browser.newContext({ acceptDownloads: true, viewport: { width: 1440, height: 900 } });
   const page = await ctx.newPage();
   const errors = [];

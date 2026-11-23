@@ -107,6 +107,27 @@ open(p, 'w').write(s.replace(old, old + "            document.write('<script src
 print('  패치 5곳')
 EOF
 
+echo "== 7b. 공통 UI 파일의 빠진 의존성 선언 보충 (wasmtools 9.4 와 같은 수정)"
+python3 - "$OUT/vendor/web-apps/apps/common/main/lib" <<'EOF2'
+# Window/BaseView 를 상속하면서 define([]) 로 의존성을 비워 둔 파일은, 로드 순서에 따라
+# "Cannot read properties of undefined (reading 'extend')" 로 편집기가 뜨지 않는다.
+import os, re, sys
+n = 0
+for d, _, fs in os.walk(sys.argv[1]):
+    for f in fs:
+        if not f.endswith('.js'): continue
+        p = os.path.join(d, f); s = open(p, encoding='utf-8').read()
+        m = re.search(r'define\(\s*\[\s*\]\s*,\s*function', s)
+        if not m: continue
+        dep = None
+        if re.search(r'Common\.UI\.Window\.extend\(', s): dep = 'common/main/lib/component/Window'
+        elif re.search(r'Common\.UI\.BaseView\.extend\(', s): dep = 'common/main/lib/component/BaseView'
+        if not dep: continue
+        s = s[:m.start()] + "define(['" + dep + "'], function" + s[m.end():]
+        open(p, 'w', encoding='utf-8').write(s); n += 1
+print(f'  {n}개 파일')
+EOF2
+
 echo "== 8. sdkjs 줄이기 (공백·구문만, 이름은 그대로)"
 for f in $(find "$OUT/vendor/sdkjs" -name 'sdk-all*.js'); do
   npx --yes esbuild@0.24.0 "$f" --minify-whitespace --minify-syntax --charset=utf8 --log-level=error --outfile="$f.tmp"

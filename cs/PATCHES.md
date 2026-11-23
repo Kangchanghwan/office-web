@@ -13,3 +13,5 @@
 | `web/vendor/web-apps/apps/spreadsheeteditor/main/offline-shim.js` | XLS(258) 허용 | 위와 같음 |
 
 vendor(web-apps, sdkjs, fonts)는 저장소에 있는 9.4 판을 쓰지 않고 `cs/build/build.sh` 가 매번 새로 만든다.
+
+빌드 때 vendor 에 거는 패치(`cs/build/build.sh`): api.js 버전 경로, 편집기 4종 시작 HTML 에 offline-shim 로드, common/main/lib 의 빠진 RequireJS 의존성(Window/BaseView) 보충, sdkjs 공백·구문 줄이기.

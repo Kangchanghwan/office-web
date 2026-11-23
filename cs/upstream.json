@@ -1,0 +1,24 @@
+{
+  "app": {
+    "repo": "https://github.com/wasmtools/office-web",
+    "commit": "80b7e9ebcd2b3d8b6f8208eb4f4d526739d6be5e"
+  },
+  "web_apps": {
+    "image": "onlyoffice/documentserver@sha256:ca17889f10b11141cc6441836aebdd2835cf3e1b49681b2fd6e155c94b7850b3",
+    "tag": "10.0.0"
+  },
+  "sdkjs": {
+    "tag": "v10.0.0.176",
+    "forms_tag": "v10.0.0.176"
+  },
+  "x2t": {
+    "url": "https://github.com/Kangchanghwan/onlyoffice-x2t-wasm/releases/download/cs-x2t-10.0.0-ed63e94/x2t.zip",
+    "sha256": "b6cd1ca6401f3ec57b62a24663739314d70a0863a15c7855d432c5aa1b33d972",
+    "core_commit": "ed63e94de814ff1d4ea28cddfaba6939bc9df9ed"
+  },
+  "fonts": {
+    "repo": "https://github.com/ranuts/document",
+    "commit": "cf4e9a7f10fd8581740f453c33c01900e94dbfdf",
+    "note": "open-licensed font catalog (79 proprietary faces replaced upstream); see docs/font-licenses.md there"
+  }
+}

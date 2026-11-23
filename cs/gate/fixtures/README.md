@@ -1,0 +1,2 @@
+- t.docx, t.xlsx, t.pptx, t.pdf: 시험용으로 직접 만든 파일
+- s.doc, s.xls, s.ppt: Apache POI test-data (Apache License 2.0)

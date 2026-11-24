@@ -32,11 +32,14 @@ jobs:
         run: ./cs/build/build.sh
       - name: Cloudflare Pages limits (files < 20000, each <= 25 MiB)
         run: python3 cs/build/check-limits.py out
+      - name: Unit tests (cbEdit core)
+        run: node --test cs/test/
       - name: Gate (open -> download for each format)
         run: |
           python3 server.py --port 8080 --root out > server.log 2>&1 &
           sleep 2
           node cs/gate/smoke.mjs http://127.0.0.1:8080
+          node cs/gate/embed.mjs http://127.0.0.1:8080
       - name: Upload report
         if: always()
         uses: actions/upload-artifact@v4
@@ -44,6 +47,7 @@ jobs:
           name: gate-report
           path: |
             cs/gate/report.json
+            cs/gate/embed-report.json
             server.log
           if-no-files-found: warn
       - name: Deploy to Cloudflare Pages

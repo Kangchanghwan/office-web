@@ -12,6 +12,12 @@
 | `web/sw.js` (새 파일) | 캐시를 지우고 스스로 등록 해제하는 서비스 워커 | 예전 편집기가 등록한 /sw.js 가 남은 브라우저가 옛 화면을 보지 않게 |
 | `web/index.html` | 한국어 문구, AGPL·소스·상표·글꼴 라이선스 안내, 한글 편집기 링크 | |
 | `web/vendor/web-apps/apps/spreadsheeteditor/main/offline-shim.js` | XLS(258) 허용 | 위와 같음 |
+| `web/app.js` | `?embed=cs` 모드와 cbEdit v1 창구(open/export/markSaved/state/setTheme, ready/chrome/dirty/saveRequest/error). 저장·내려받기·자동저장·홈 화면은 embed 에서 끔 | Clipboard Share 가 iframe 으로 쓰기 위함 |
+| `web/cs-embed-core.js` (새 파일) | 출처 허용 목록, 메서드 분기, 형식 규칙(순수 로직) | 단위 시험(`cs/test/`) |
+| `web/index.html` | cs-embed-core.js 로드, embed 일 때 홈·제목줄 숨김 | |
+| `cs/build/_headers` | frame-ancestors 에 vercel.app, localhost, 127.0.0.1 추가 | cbEdit 규약의 부모 허용 목록 |
+| `cs/test/`, `cs/gate/embed.mjs`, `.github/workflows/cs-deploy.yml` | cbEdit 단위 시험과 embed 게이트 | |
+| `web/app.js` | BUILD_VERSION 10.0.0-cs2-embed | 캐시 갱신 |
 
 vendor(web-apps, sdkjs, fonts)는 저장소에 있는 9.4 판을 쓰지 않고 `cs/build/build.sh` 가 매번 새로 만든다.
 

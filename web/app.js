@@ -16,7 +16,7 @@
 
     // Bump on every deploy: keys the Cache API entry for x2t.wasm, so users
     // re-download the converter exactly once per release.
-    var BUILD_VERSION = '10.0.0-cs1';
+    var BUILD_VERSION = '10.0.0-cs2-embed';
     window.__OO_BUILD_VERSION = BUILD_VERSION;
 
     // ---------- Service Worker cache version guard ----------
@@ -70,6 +70,9 @@
     // ---------- config from URL ----------
     var PARAMS = {};
     new URLSearchParams(window.location.search).forEach(function (v, k) { PARAMS[k] = v; });
+    // [cs] ?embed=cs: Clipboard Share iframe mode (cbEdit v1, see cs/PATCHES.md)
+    var EMBED = PARAMS.embed === 'cs';
+    if (EMBED) document.documentElement.classList.add('cs-embed');
 
     // ---------- i18n ----------
     // The editors ship 40+ locale packs (vendor/web-apps/apps/*/main/locale/);
@@ -660,7 +663,7 @@
         waitForEditorApi(function (ed) {
             try { ed.asc_registerCallback('asc_onDocumentCanSaveChanged', onEditorCanSaveChanged); } catch (e) {}
         });
-        startAutosave();
+        if (!EMBED) startAutosave();   // [cs] embed: no local autosave
     }
     // A persist succeeded. Clear the dirty flag unless the user kept editing
     // while the save was in flight (editSeq advanced), and sync the PDF
@@ -704,9 +707,11 @@
                 documentReady = true;
                 setStatus('');
                 hookAutosave();
+                if (EMBED) embedDocReady(docType);
             } else if (waited > 60000) {
                 clearInterval(timer);
                 setStatus(t('Document render timeout. Please reload.'), true);
+                if (EMBED) embedOpenFailed('render timeout');
             }
         }, 300);
     }
@@ -755,7 +760,10 @@
                         docEditor.openDocument({ buffer: buf.buffer });
                     }
                 },
-                onError: function (e) { setStatus(t('Editor error: %s', JSON.stringify(e && e.data)), true); },
+                onError: function (e) {
+                    setStatus(t('Editor error: %s', JSON.stringify(e && e.data)), true);
+                    if (EMBED) embedEditorError(e);
+                },
                 onDownloadAs: function () {},
                 onRequestClose: function () { window.close(); },
                 onRequestSave: function () { saveDocument(); }
@@ -829,6 +837,7 @@
             });
         }).catch(function (e) {
             setStatus(t('Open failed: %s', (e && e.message || e)), true);
+            if (EMBED) embedOpenFailed(e && e.message || e);
         });
     }
 
@@ -847,6 +856,7 @@
     // ---------- save ----------
     var saveInFlight = false;
     function saveDocument() {
+        if (EMBED) { embedEmit({ event: 'saveRequest' }); return true; }   // [cs] no download/persist; parent decides
         if (saveInFlight) return false;
         saveInFlight = true;
         doSave().then(function (ok) { saveInFlight = false; return ok; })
@@ -987,6 +997,7 @@
     };
 
     function handleOfflineDownload(msg) {
+        if (EMBED) { embedEmit({ event: 'saveRequest' }); return; }   // [cs] no browser download
         var ext = OFFLINE_FORMAT_EXT[msg.format];
         if (!ext) {
             var nm = OFFLINE_FORMAT_NAMES[msg.format] || ('format #' + msg.format);
@@ -1332,6 +1343,225 @@
         return window.__x2tReadyPromise;
     }
 
+
+    // ---------- [cs] cbEdit v1 (Clipboard Share iframe bridge) ----------
+    var CORE = window.CbEmbedCore;
+    var embedParentOrigin = null;   // origin of the first valid request
+    var embedOpening = null;        // { resolve, reject, docType } while open() is pending
+    var embedLastDirty = false;
+    var embedLastChrome = '';
+    var embedPollTimer = null;
+    var EMBED_FALLBACK_CHROME = { bg: '#446995', fg: '#ffffff', border: '#446995' };
+
+    function embedInitialTarget() {
+        var cands = [];
+        try { if (location.ancestorOrigins && location.ancestorOrigins[0]) cands.push(location.ancestorOrigins[0]); } catch (e) {}
+        try { if (document.referrer) cands.push(new URL(document.referrer).origin); } catch (e) {}
+        for (var i = 0; i < cands.length; i++) if (CORE.isAllowedOrigin(cands[i], location.origin)) return cands[i];
+        return null;
+    }
+    // Events go only to a verified parent origin. Before the first request only
+    // `ready` may use the ancestor/referrer guess or '*' (it carries no secret).
+    function embedEmit(msg, transfer) {
+        if (window.parent === window) return;
+        msg.cbEdit = 1;
+        var target = embedParentOrigin;
+        if (!target) {
+            if (msg.event !== 'ready') return;
+            target = embedInitialTarget() || '*';
+        }
+        try { window.parent.postMessage(msg, target, transfer || []); } catch (e) {}
+    }
+    function embedFrame() { return document.querySelector('iframe[name="frameEditor"]'); }
+    function embedReadChrome() {
+        try {
+            var fr = embedFrame();
+            var d = fr && fr.contentDocument;
+            var w = fr && fr.contentWindow;
+            var tabs = d && d.querySelector('.toolbar .tabs');
+            if (!tabs) return null;
+            var cs = w.getComputedStyle(tabs);
+            var bg = cs.backgroundColor;
+            if (!bg || /rgba\(.*,\s*0\)$/.test(bg) || bg === 'transparent') {
+                bg = w.getComputedStyle(d.documentElement).getPropertyValue('--toolbar-header-' + 'document').trim() || EMBED_FALLBACK_CHROME.bg;
+            }
+            var a = tabs.querySelector('li a, a, li');
+            var fg = a ? w.getComputedStyle(a).color : '';
+            if (!fg) fg = w.getComputedStyle(d.documentElement).getPropertyValue('--text-toolbar-header').trim() || EMBED_FALLBACK_CHROME.fg;
+            var border = bg;
+            var m = /(rgba?\([^)]*\)|#[0-9a-f]{3,8})/i.exec(cs.boxShadow || '');
+            if (m && !/rgba\(.*,\s*0\)$/.test(m[1])) border = m[1];
+            return { bg: bg, fg: fg, border: border };
+        } catch (e) { return null; }
+    }
+    function embedSendChromeIfChanged(force) {
+        var c = embedReadChrome();
+        if (!c) return;
+        var k = c.bg + '|' + c.fg + '|' + c.border;
+        if (!force && k === embedLastChrome) return;
+        embedLastChrome = k;
+        embedEmit({ event: 'chrome', chrome: c });
+    }
+    function embedPoll() {
+        if (embedOpening || !documentReady || !currentFile) return;
+        var d = !!editorDirtyNow();
+        if (d !== embedLastDirty) { embedLastDirty = d; embedEmit({ event: 'dirty', dirty: d }); }
+        embedSendChromeIfChanged(false);
+    }
+    function embedPdfBaseline() {
+        if ((window.__ooDocExt || '').toLowerCase() !== 'pdf') return;
+        var fr = embedFrame(), w = fr && fr.contentWindow;
+        try {
+            var ch = w && w.__ooGetPdfChanges && w.__ooGetPdfChanges();
+            lastSavedChangesLen = ch ? ch.length : 26;
+        } catch (e) {}
+    }
+    function embedResetEditor() {
+        stopAutosave();
+        if (docEditor && typeof docEditor.destroyEditor === 'function') {
+            try { docEditor.destroyEditor(); } catch (e) {}
+        }
+        docEditor = null;
+        var ed = document.getElementById('editor');
+        if (ed) ed.innerHTML = '';
+        pendingBin = null;
+        window.__ooPendingDocBin = null;
+        window.__ooMediaMap = {};
+        window.__ooMediaMapByBase = {};
+        documentReady = false;
+        emptyDocGotReal = false;
+        currentFile = null;
+        window.__ooDocExt = '';
+    }
+    function embedPages(docType) {
+        try {
+            var ed = embedFrame().contentWindow.Asc.editor;
+            if (docType === 'slide') return ed.WordControl.m_oLogicDocument.Slides.length;
+            if (docType === 'pdf') return ed.DocumentRenderer.file.pages.length;
+            if (docType === 'word') return ed.WordControl.m_oLogicDocument.Pages.length;
+        } catch (e) {}
+        return undefined;
+    }
+    function embedDocReady(docType) {
+        var op = embedOpening;
+        if (!op) return;
+        // let the editor's initial "can save" signals settle, then start clean
+        setTimeout(function () {
+            if (embedOpening !== op) return;
+            dirty = false; editSeq++;
+            clearEditorModifiedFlag(embedFrame());
+            embedPdfBaseline();
+            embedLastDirty = false;
+            embedOpening = null;
+            embedSendChromeIfChanged(true);
+            var res = {};
+            var pages = embedPages(docType);
+            if (typeof pages === 'number') res.pages = pages;
+            op.resolve(res);
+        }, 400);
+    }
+    function embedOpenFailed(msg) {
+        var op = embedOpening;
+        if (!op) return;
+        embedOpening = null;
+        op.reject({ code: 'OPEN_FAILED', message: String(msg || 'open failed') });
+    }
+    function embedEditorError(e) {
+        if (embedOpening) { embedOpenFailed('editor error: ' + JSON.stringify(e && e.data)); return; }
+        embedEmit({ event: 'error', code: 'EDITOR_ERROR', message: JSON.stringify(e && e.data) || 'editor error' });
+    }
+    function isArrayBuffer(b) { return Object.prototype.toString.call(b) === '[object ArrayBuffer]'; }
+
+    function embedOpen(args) {
+        if (embedOpening) throw { code: 'BUSY', message: 'open in progress' };
+        var name = args && typeof args.name === 'string' ? args.name : '';
+        var ext = CORE.extOf(name);
+        if (!CORE.isAccepted(ext)) throw { code: 'UNSUPPORTED', message: 'unsupported extension: ' + ext };
+        if (!args || !isArrayBuffer(args.bytes) || !args.bytes.byteLength) throw { code: 'OPEN_FAILED', message: 'bytes must be a non-empty ArrayBuffer' };
+        // Build a File first, like the home screen's upload path
+        var file = new File([args.bytes], name);
+        return file.arrayBuffer().then(function (buf) {
+            return new Promise(function (resolve, reject) {
+                if (embedOpening) { reject({ code: 'BUSY', message: 'open in progress' }); return; }
+                embedOpening = { resolve: resolve, reject: reject };
+                embedResetEditor();
+                embedLastDirty = false;
+                openFile({ name: name, ext: ext, data: new Uint8Array(buf) });
+            });
+        });
+    }
+    function embedProduceBytes(ext) {
+        var frame = embedFrame();
+        var w = frame && frame.contentWindow;
+        if (!w || typeof w.__ooGetFileData !== 'function') return Promise.reject(new Error('editor not ready'));
+        if (ext === 'pdf') {
+            var base = w.__ooGetFileData();
+            if (!base || !base.length) return Promise.reject(new Error('no document data'));
+            var changes = w.__ooGetPdfChanges ? w.__ooGetPdfChanges() : null;
+            return mergePdfChanges(base, changes).then(function (m) { return m.slice(); }, function (e) {
+                // only fall back to the untouched base when there were no edits to lose
+                if (!changes || changes.length <= 26) return base.slice();
+                throw e;
+            });
+        }
+        return window.__x2tReadyPromise.then(function (mod) {
+            var bin = w.__ooGetFileData();
+            if (!bin || !bin.length) throw new Error('no document data');
+            var supported = detectBinType(bin);
+            var out = ext;
+            if (supported && supported.indexOf(ext) < 0) out = supported[0];
+            return { ext: out, bytes: x2tConvert(mod, bin, 'bin', out, 'save').slice() };
+        });
+    }
+    function embedExport(args) {
+        if (!documentReady || !currentFile) throw { code: 'NO_DOCUMENT', message: 'no document open' };
+        var r = CORE.resolveExport(currentFile.ext, args && args.format);
+        if (r.error) throw r.error;
+        return embedProduceBytes(r.ext).then(function (res) {
+            var bytes = res instanceof Uint8Array ? res : res.bytes;
+            var ext = res instanceof Uint8Array ? r.ext : res.ext;
+            return { bytes: bytes.buffer, ext: ext, mime: CORE.MIME[ext] || 'application/octet-stream' };
+        }).catch(function (e) {
+            if (e && e.code) throw e;
+            throw { code: 'EXPORT_FAILED', message: String(e && e.message || e) };
+        });
+    }
+    function embedMarkSaved() {
+        dirty = false; editSeq++;
+        if (documentReady) { clearEditorModifiedFlag(embedFrame()); embedPdfBaseline(); }
+        embedLastDirty = false;
+        embedEmit({ event: 'dirty', dirty: false });
+        return {};
+    }
+    var EMBED_HOST = {
+        open: embedOpen,
+        export: embedExport,
+        markSaved: embedMarkSaved,
+        state: function () {
+            return { loaded: !!(documentReady && currentFile), dirty: !!(documentReady && editorDirtyNow()),
+                     name: currentFile ? currentFile.name : null, ext: currentFile ? currentFile.ext : null };
+        },
+        setTheme: function () { return {}; }   // theme is not switchable at runtime in this fork
+    };
+    function embedInit() {
+        window.addEventListener('message', function (e) {
+            var d = e.data;
+            if (!d || d.cbEdit !== 1 || typeof d.method !== 'string') return;
+            if (e.source !== window.parent || !CORE.isAllowedOrigin(e.origin, location.origin)) return;
+            embedParentOrigin = e.origin;
+            var p = CORE.dispatch(EMBED_HOST, d);
+            if (!p) return;
+            p.then(function (resp) {
+                resp.cbEdit = 1; resp.id = d.id;
+                var tr = (resp.ok && resp.result && isArrayBuffer(resp.result.bytes)) ? [resp.result.bytes] : [];
+                try { e.source.postMessage(resp, e.origin, tr); } catch (x) {}
+            });
+        });
+        embedPollTimer = setInterval(embedPoll, 400);
+        embedEmit({ event: 'ready', editor: 'office', version: BUILD_VERSION,
+                    accepts: CORE.ACCEPTS.slice(), chrome: EMBED_FALLBACK_CHROME });
+    }
+
     // ---------- boot ----------
     function boot() {
         translateShell();
@@ -1393,6 +1623,7 @@
         // IndexedDB transaction finish). Either way the last dirty state
         // lands in the library even if the 30s timer hasn't fired yet.
         var saveIfDirty = function () {
+            if (EMBED) return;
             if (editorDirtyNow() && !saveInFlight) saveDocument();
         };
         document.addEventListener('visibilitychange', function () {
@@ -1427,6 +1658,9 @@
             });
         }
 
+        if (EMBED) {
+            embedInit();   // [cs] blank waiting state, no home screen / library
+        } else
         // ?open=<id> deep link into a stored file
         if (PARAMS.open && window.FileStore) {
             loadFromFileStore(PARAMS.open);

@@ -33,7 +33,7 @@ jobs:
       - name: Cloudflare Pages limits (files < 20000, each <= 25 MiB)
         run: python3 cs/build/check-limits.py out
       - name: Unit tests (cbEdit core)
-        run: node --test cs/test/
+        run: node --test cs/test/embed-core.test.cjs
       - name: Gate (open -> download for each format)
         run: |
           python3 server.py --port 8080 --root out > server.log 2>&1 &

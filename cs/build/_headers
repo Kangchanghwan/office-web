@@ -1,7 +1,7 @@
 /*
   X-Content-Type-Options: nosniff
   Referrer-Policy: strict-origin-when-cross-origin
-  Content-Security-Policy: frame-ancestors 'self' https://clipboardapp.org https://www.clipboardapp.org
+  Content-Security-Policy: frame-ancestors 'self' https://clipboardapp.org https://www.clipboardapp.org https://*.vercel.app http://localhost:* http://127.0.0.1:*
 
 /*.html
   Cache-Control: no-cache

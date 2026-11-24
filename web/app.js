@@ -1354,8 +1354,8 @@
     var embedLastChrome = '';
     var embedPollTimer = null;
     // light-theme tab row measured in the CI gate; the exact colors follow in a `chrome` event once a document opens
-    var EMBED_FALLBACK_CHROME = { bg: '#f3f3f3', fg: '#306ad9', border: '#f3f3f3' };
-    var EMBED_DARK_CHROME = { bg: '#2a2a2a', fg: '#e1e1e1', border: '#2a2a2a' };
+    var EMBED_FALLBACK_CHROME = { bg: '#f3f3f3', fg: '#444444', border: '#f3f3f3' };
+    var EMBED_DARK_CHROME = { bg: '#222222', fg: '#ffffff', border: '#222222' };
     var embedTheme = (PARAMS.theme === 'light' || PARAMS.theme === 'dark') ? PARAMS.theme : null;
     function embedThemeId() {
         if (!EMBED || !embedTheme) return null;
@@ -1401,9 +1401,11 @@
             if (!bg || /rgba\(.*,\s*0\)$/.test(bg) || bg === 'transparent') {
                 bg = w.getComputedStyle(d.documentElement).getPropertyValue('--toolbar-header-' + 'document').trim() || EMBED_FALLBACK_CHROME.bg;
             }
-            var a = tabs.querySelector('li a, a, li');
-            var fg = a ? w.getComputedStyle(a).color : '';
-            if (!fg) fg = w.getComputedStyle(d.documentElement).getPropertyValue('--text-toolbar-header').trim() || EMBED_FALLBACK_CHROME.fg;
+            // fg: body text color of the editor (title/document name color), not the tab link blue
+            var tn = d.querySelector('#title-doc-name, .doc-name');
+            var fg = tn ? w.getComputedStyle(tn).color : '';
+            if (!fg || /rgba\(.*,\s*0\)$/.test(fg)) fg = w.getComputedStyle(d.documentElement).getPropertyValue('--text-normal').trim();
+            if (!fg) fg = w.getComputedStyle(d.body).color || EMBED_FALLBACK_CHROME.fg;
             var border = bg;
             var m = /(rgba?\([^)]*\)|#[0-9a-f]{3,8})/i.exec(cs.boxShadow || '');
             if (m && !/rgba\(.*,\s*0\)$/.test(m[1])) border = m[1];

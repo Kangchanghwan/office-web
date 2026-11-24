@@ -138,19 +138,20 @@ console.log('last chrome event', JSON.stringify(chromeEv));
     const o = await openCase(CASES[0]);
     if (!o.ok) throw new Error('open ' + JSON.stringify(o.error));
     await page.waitForTimeout(2500);
-    return page.evaluate(() => window.events.filter(e => e.event === 'chrome').slice(-1)[0]?.chrome.bg);
+    return page.evaluate(() => window.events.filter(e => e.event === 'chrome').slice(-1)[0]?.chrome);
   };
   let ok = false, note = '';
   try {
-    const light = await bgFor('light');
-    const dark = await bgFor('dark');
+    const lc = await bgFor('light'), dc = await bgFor('dark');
+    const light = lc?.bg, dark = dc?.bg;
+    console.log('fg light', lc?.fg, 'fg dark', dc?.fg);
     // 열린 dark 편집기를 setTheme 으로 light 로
     await page.evaluate(() => window.events.length = 0);
     const st = await call('setTheme', { theme: 'light' });
     await page.waitForTimeout(3000);
     const after = await page.evaluate(() => window.events.filter(e => e.event === 'chrome').slice(-1)[0]?.chrome.bg);
     note = `light bg ${light} / dark bg ${dark} / setTheme 후 ${after}`;
-    ok = !!light && !!dark && light !== dark && st.ok && after === light;
+    ok = !!light && !!dark && light !== dark && lum(lc.fg) < lum(dc.fg) && st.ok && after === light;
     if (light !== dark && st.ok && after !== light) note += ' (setTheme 즉시 반영 안 됨)';
   } catch (e) { note = String(e).split('\n')[0].slice(0, 200); }
   if (!ok) failed++;

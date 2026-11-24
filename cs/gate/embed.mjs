@@ -24,8 +24,8 @@ const CASES = [
   { file: 's.ppt',  ext: 'pptx', check: isZip },
 ];
 
-const PARENT_HTML = `<!doctype html><meta charset=utf-8><body style="margin:0">
-<iframe id=f src="${BASE}/?embed=cs&theme=light" style="width:1280px;height:800px;border:0"></iframe>
+const parentHtml = (theme) => `<!doctype html><meta charset=utf-8><body style="margin:0">
+<iframe id=f src="${BASE}/?embed=cs&theme=${theme}" style="width:1280px;height:800px;border:0"></iframe>
 <script>
 window.events = []; window.pending = {}; let n = 0;
 addEventListener('message', e => {
@@ -44,10 +44,10 @@ const browser = await chromium.launch();
 const results = [];
 let failed = 0;
 let ctx, page;
-async function session() {
+async function session(theme = 'light') {
   if (ctx) await ctx.close();
   ctx = await browser.newContext({ viewport: { width: 1280, height: 800 } });
-  await ctx.route(PARENT + '/**', r => r.fulfill({ status: 200, contentType: 'text/html', body: PARENT_HTML }));
+  await ctx.route(PARENT + '/**', r => r.fulfill({ status: 200, contentType: 'text/html', body: parentHtml(theme) }));
   page = await ctx.newPage();
   page.on('pageerror', e => console.log('  pageerror', String(e).slice(0, 120)));
   await page.goto(PARENT + '/p.html');
@@ -129,6 +129,34 @@ for (const c of CASES) {
 }
 const chromeEv = await page.evaluate(() => window.events.filter(e => e.event === 'chrome').slice(-1)[0] || null);
 console.log('last chrome event', JSON.stringify(chromeEv));
+// 테마: theme=light / theme=dark 에서 chrome.bg 가 달라야 하고, setTheme 으로 열린 편집기가 바로 바뀌어야 한다
+{
+  const lum = c => { const m = String(c).match(/\d+/g); return m ? Number(m[0]) + Number(m[1]) + Number(m[2]) : -1; };
+  const hex = c => c;
+  const bgFor = async theme => {
+    await session(theme);
+    const o = await openCase(CASES[0]);
+    if (!o.ok) throw new Error('open ' + JSON.stringify(o.error));
+    await page.waitForTimeout(2500);
+    return page.evaluate(() => window.events.filter(e => e.event === 'chrome').slice(-1)[0]?.chrome.bg);
+  };
+  let ok = false, note = '';
+  try {
+    const light = await bgFor('light');
+    const dark = await bgFor('dark');
+    // 열린 dark 편집기를 setTheme 으로 light 로
+    await page.evaluate(() => window.events.length = 0);
+    const st = await call('setTheme', { theme: 'light' });
+    await page.waitForTimeout(3000);
+    const after = await page.evaluate(() => window.events.filter(e => e.event === 'chrome').slice(-1)[0]?.chrome.bg);
+    note = `light bg ${light} / dark bg ${dark} / setTheme 후 ${after}`;
+    ok = !!light && !!dark && light !== dark && st.ok && after === light;
+    if (light !== dark && st.ok && after !== light) note += ' (setTheme 즉시 반영 안 됨)';
+  } catch (e) { note = String(e).split('\n')[0].slice(0, 200); }
+  if (!ok) failed++;
+  console.log(`${ok ? 'PASS' : 'FAIL'}  theme  ${note}`);
+  results.push({ case: 'theme', ok, note });
+}
 await browser.close();
 fs.writeFileSync(path.join(HERE, 'embed-report.json'), JSON.stringify(results, null, 2));
 process.exit(failed ? 1 : 0);

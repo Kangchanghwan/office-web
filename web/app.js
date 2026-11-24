@@ -717,6 +717,7 @@
     }
 
     function createEditor(fileExt, title) {
+        embedApplyThemeStorage();
         var docType = detectDocumentType(fileExt);
         var document = {
             fileType: fileExt,
@@ -747,6 +748,7 @@
                 // [cs] spell-check dictionaries are not shipped; without them every
                 // word is underlined, so start with spell checking off.
                 customization: { about: false, feedback: false, autosave: false,
+                                 uiTheme: embedThemeId() || undefined,
                                  features: { spellcheck: { mode: false, change: true } } }
             },
             events: {
@@ -1353,6 +1355,19 @@
     var embedPollTimer = null;
     // light-theme tab row measured in the CI gate; the exact colors follow in a `chrome` event once a document opens
     var EMBED_FALLBACK_CHROME = { bg: '#f3f3f3', fg: '#306ad9', border: '#f3f3f3' };
+    var EMBED_DARK_CHROME = { bg: '#2a2a2a', fg: '#e1e1e1', border: '#2a2a2a' };
+    var embedTheme = (PARAMS.theme === 'light' || PARAMS.theme === 'dark') ? PARAMS.theme : null;
+    function embedThemeId() {
+        if (!EMBED || !embedTheme) return null;
+        return embedTheme === 'dark' ? 'theme-night' : 'theme-white';   // ONLYOFFICE 10.0 default dark/light ids
+    }
+    // The editor iframe is same-origin and reads localStorage `ui-theme-id` at start-up
+    // (themeinit.js); without this it follows the system theme.
+    function embedApplyThemeStorage() {
+        var id = embedThemeId();
+        if (!id) return;
+        try { localStorage.setItem('ui-theme-id', id); localStorage.removeItem('ui-theme'); } catch (e) {}
+    }
 
     function embedInitialTarget() {
         var cands = [];
@@ -1542,7 +1557,20 @@
             return { loaded: !!(documentReady && currentFile), dirty: !!(documentReady && editorDirtyNow()),
                      name: currentFile ? currentFile.name : null, ext: currentFile ? currentFile.ext : null };
         },
-        setTheme: function () { return {}; }   // theme is not switchable at runtime in this fork
+        setTheme: function (args) {
+            var th = args && args.theme;
+            if (th !== 'light' && th !== 'dark') return {};
+            embedTheme = th;
+            embedApplyThemeStorage();
+            // apply to an open editor right away; otherwise the next open() picks it up
+            try {
+                var w = embedFrame() && embedFrame().contentWindow;
+                if (w && w.Common && w.Common.UI && w.Common.UI.Themes) w.Common.UI.Themes.setTheme(embedThemeId());
+            } catch (e) {}
+            setTimeout(function () { embedSendChromeIfChanged(false); }, 300);
+            setTimeout(function () { embedSendChromeIfChanged(false); }, 1200);
+            return {};
+        },
     };
     function embedInit() {
         window.addEventListener('message', function (e) {
@@ -1560,7 +1588,7 @@
         });
         embedPollTimer = setInterval(embedPoll, 400);
         embedEmit({ event: 'ready', editor: 'office', version: BUILD_VERSION,
-                    accepts: CORE.ACCEPTS.slice(), chrome: EMBED_FALLBACK_CHROME });
+                    accepts: CORE.ACCEPTS.slice(), chrome: embedTheme === 'dark' ? EMBED_DARK_CHROME : EMBED_FALLBACK_CHROME });
     }
 
     // ---------- boot ----------

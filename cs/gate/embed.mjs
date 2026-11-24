@@ -96,11 +96,11 @@ for (const c of CASES) {
     let dirtyNote = '';
     if (c.type) {
       try {
-        const fr = await editorFrame();
+        await editorFrame();
         await page.evaluate(() => window.events.length = 0);
-        if (c.type === 'word') await fr.locator('#id_viewer_overlay, #id_target_cursor, canvas').first().click({ position: { x: 300, y: 200 }, timeout: 5000 });
-        else await fr.locator('#id_viewer_overlay, canvas').first().click({ position: { x: 200, y: 100 }, timeout: 5000 });
+        await page.mouse.click(640, 450);
         await page.keyboard.type('Z');
+        await page.keyboard.press('Enter');
         await page.waitForFunction(() => window.events.some(e => e.event === 'dirty' && e.dirty === true), null, { timeout: 8000 });
         dirtyNote = ' dirty:OK';
       } catch (e) { dirtyNote = ' dirty:미확인(' + String(e).split('\n')[0].slice(0, 60) + ')'; }

@@ -1351,7 +1351,8 @@
     var embedLastDirty = false;
     var embedLastChrome = '';
     var embedPollTimer = null;
-    var EMBED_FALLBACK_CHROME = { bg: '#446995', fg: '#ffffff', border: '#446995' };
+    // light-theme tab row measured in the CI gate; the exact colors follow in a `chrome` event once a document opens
+    var EMBED_FALLBACK_CHROME = { bg: '#f3f3f3', fg: '#306ad9', border: '#f3f3f3' };
 
     function embedInitialTarget() {
         var cands = [];

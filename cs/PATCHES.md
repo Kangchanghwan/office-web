@@ -22,3 +22,6 @@
 vendor(web-apps, sdkjs, fonts)는 저장소에 있는 9.4 판을 쓰지 않고 `cs/build/build.sh` 가 매번 새로 만든다.
 
 빌드 때 vendor 에 거는 패치(`cs/build/build.sh`): api.js 버전 경로, 편집기 4종 시작 HTML 에 offline-shim 로드, common/main/lib 의 빠진 RequireJS 의존성(Window/BaseView) 보충, sdkjs 공백·구문 줄이기.
+| `web/index.html` | `<meta name="robots" content="noindex">`, cs-direct-notice.js 로드 | 검색 결과 제외, 직접 접속 안내 |
+| `web/cs-direct-notice.js` (새 파일), `cs/test/direct-notice.test.cjs` | 최상위 창·embed 아님일 때만 「Clipboard Share로 돌아가기」 한 줄(28px), 닫기 기억 | 주소창 직접 접속자 안내 |
+| `cs/build/_headers` | `/*` 규칙에 `X-Robots-Tag: noindex` | 검색 결과 제외 (robots.txt 로는 막지 않음) |
